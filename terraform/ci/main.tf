@@ -48,8 +48,7 @@ resource "aws_iam_role" "github_deploy" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "token.actions.githubusercontent.com:aud"          = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:repository" = "wearecrew/reskinned-fashionclip-service"
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
           "token.actions.githubusercontent.com:sub" = "repo:wearecrew/reskinned-fashionclip-service:*"
