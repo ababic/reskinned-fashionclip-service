@@ -12,7 +12,7 @@ Then in GitHub → **Settings → Secrets and variables → Actions**:
 
 | Kind | Name | Value |
 |------|------|--------|
-| Variable | `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` |
+| Variable **or** Secret | `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` (variable preferred; secret also works) |
 | Secret | `HF_TOKEN` | Hugging Face token (optional; speeds model bake) |
 | Secret | `PRINT_VISION_API_KEY` | API Gateway key (optional; enables post-deploy smoke test) |
 
