@@ -30,7 +30,6 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   thumbprint_list = distinct(concat(
     [
       "6938fd4d98bab03faadb97b34396831e3780aea1",
-      "1c58a3a8518e8009b087241efbe0b528c7db145",
     ],
     [for cert in data.tls_certificate.github_actions.certificates : cert.sha1_fingerprint],
   ))
@@ -49,7 +48,8 @@ resource "aws_iam_role" "github_deploy" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:aud"          = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:repository" = "wearecrew/reskinned-fashionclip-service"
         }
         StringLike = {
           "token.actions.githubusercontent.com:sub" = "repo:wearecrew/reskinned-fashionclip-service:*"

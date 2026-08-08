@@ -17,6 +17,9 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
     environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
     env:
       AWS_REGION: eu-west-1
