@@ -89,6 +89,24 @@ jobs:
             --function-name "$LAMBDA_FUNCTION" \
             --region "$AWS_REGION"
 
+      - name: Tag Lambda with Sentry release
+        env:
+          SENTRY_RELEASE: ${{ github.sha }}
+        run: |
+          VARS=$(aws lambda get-function-configuration \
+            --function-name "$LAMBDA_FUNCTION" \
+            --region "$AWS_REGION" \
+            --query 'Environment.Variables' \
+            --output json | jq --arg rel "$SENTRY_RELEASE" '. + {SENTRY_RELEASE: $rel}')
+          aws lambda update-function-configuration \
+            --function-name "$LAMBDA_FUNCTION" \
+            --environment "$(jq -n --argjson vars "$VARS" '{Variables: $vars}')" \
+            --region "$AWS_REGION"
+          aws lambda wait function-updated \
+            --function-name "$LAMBDA_FUNCTION" \
+            --region "$AWS_REGION"
+          echo "Set SENTRY_RELEASE=$SENTRY_RELEASE"
+
       - name: Smoke test /v1/score
         env:
           PRINT_VISION_URL: ${{ vars.PRINT_VISION_URL }}
