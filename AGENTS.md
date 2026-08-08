@@ -30,7 +30,7 @@ just build-image    # arm64 Docker; optional HF_TOKEN in .env
 | `test.yaml` | PR + push to `main`/`staging` | ruff + pytest |
 | `deploy.yaml` | push to `main`/`staging` | ECR push + Lambda update |
 
-Configure GitHub per `terraform/ci/README.md` (`AWS_DEPLOY_ROLE_ARN`, optional `HF_TOKEN`, environment `PRINT_VISION_URL`).
+Configure GitHub per `terraform/ci/README.md` — repo **secret** `AWS_DEPLOY_ROLE_ARN` (or variable), optional `HF_TOKEN`, environment `PRINT_VISION_URL`.
 
 ## Sentry
 
