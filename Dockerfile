@@ -53,6 +53,7 @@ ENV PATH=/var/task/.venv/bin:/var/lang/bin:/usr/local/bin:/usr/bin/:/bin:/opt/bi
     TORCH_DISABLE_SHARE_RDZV_TCP_STORE=1
 
 COPY --from=builder /var/task/.venv /var/task/.venv
+COPY --from=builder /var/task/src /var/task/src
 COPY --from=builder /var/task/models /var/task/models
 
 CMD ["src.handler.lambda_handler"]
