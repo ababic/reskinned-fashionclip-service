@@ -10,8 +10,9 @@ RUN dnf install -y git findutils && dnf clean all
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
+RUN uv sync --frozen --no-dev --no-install-project
 
+COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 # Bake FashionCLIP as safetensors only (offline at runtime).

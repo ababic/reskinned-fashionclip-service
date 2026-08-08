@@ -74,15 +74,16 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push image
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          IMAGE_URI: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
-        run: |
-          docker build --platform linux/arm64 \
-            --build-arg HF_TOKEN="$HF_TOKEN" \
-            -t "$IMAGE_URI" \
-            .
-          docker push "$IMAGE_URI"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+          build-args: |
+            HF_TOKEN=${{ secrets.HF_TOKEN }}
+          cache-from: type=registry,ref=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:buildcache
+          cache-to: type=registry,ref=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:buildcache,mode=max
 
       - name: Update Lambda function code
         env:
