@@ -124,23 +124,65 @@ jobs:
             echo "Skipping smoke test — set environment vars PRINT_VISION_URL and secret PRINT_VISION_API_KEY."
             exit 0
           fi
-          payload='{"images":[{"url":"https://cdn.shopify.com/s/files/1/0081/8711/7664/files/Dayflex_leggingpantnofrontseam_shadowblack_10189.jpg?v=1744812821"}],"pools":{"pattern-application":["Placement print","All-over print"],"pattern":["Floral","Striped"]},"top_k":3}'
-          for attempt in 1 2 3; do
-            http_code=$(curl -sS -o /tmp/smoke-body.json -w "%{http_code}" --max-time 120 \
-              -X POST "$PRINT_VISION_URL" \
-              -H "content-type: application/json" \
-              -H "x-api-key: $PRINT_VISION_API_KEY" \
-              -d "$payload" || echo "000")
-            if [ "$http_code" = "200" ]; then
-              python3 -c "import json; d=json.load(open('/tmp/smoke-body.json')); assert d.get('results'), d; print('smoke ok:', d['results'][0]['scores'].keys())"
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ] && echo "$http_code" | grep -qE '502|503|504'; then
-              echo "Attempt $attempt got HTTP $http_code (likely cold start); retrying in 45s..."
-              sleep 45
-              continue
-            fi
-            echo "Smoke test failed with HTTP $http_code"
+          python3 - <<'PY'
+          import json
+
+          payload = {
+              "images": [
+                  {
+                      "url": "https://cdn.shopify.com/s/files/1/0081/8711/7664/files/Dayflex_leggingpantnofrontseam_shadowblack_10189.jpg?v=1744812821",
+                  }
+              ],
+              "pools": {
+                  "pattern-application": ["Placement print", "All-over print"],
+                  "pattern": ["Floral", "Striped"],
+              },
+              "top_k": 3,
+          }
+          json.dump(
+              {
+                  "httpMethod": "POST",
+                  "path": "/v1/score",
+                  "headers": {"content-type": "application/json"},
+                  "body": json.dumps(payload),
+              },
+              open("/tmp/smoke-event.json", "w"),
+          )
+          json.dump(payload, open("/tmp/smoke-payload.json", "w"))
+          PY
+          echo "Warming Lambda via direct invoke (cold start can take ~60–90s)..."
+          aws lambda invoke \
+            --function-name "$LAMBDA_FUNCTION" \
+            --region "$AWS_REGION" \
+            --payload file:///tmp/smoke-event.json \
+            /tmp/lambda-response.json >/tmp/lambda-invoke-meta.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          raw = json.load(open("/tmp/lambda-response.json"))
+          if "errorMessage" in raw:
+              print("Lambda invoke failed:", raw, file=sys.stderr)
+              sys.exit(1)
+          status = raw.get("statusCode")
+          if status != 200:
+              print("Unexpected statusCode:", raw, file=sys.stderr)
+              sys.exit(1)
+          body = json.loads(raw["body"])
+          if not body.get("results"):
+              print("No results in warm invoke:", body, file=sys.stderr)
+              sys.exit(1)
+          print("warm invoke ok:", body["results"][0]["scores"].keys())
+          PY
+          echo "Checking API Gateway (warm container)..."
+          http_code=$(curl -sS -o /tmp/smoke-body.json -w "%{http_code}" --max-time 30 \
+            -X POST "$PRINT_VISION_URL" \
+            -H "content-type: application/json" \
+            -H "x-api-key: $PRINT_VISION_API_KEY" \
+            -d @/tmp/smoke-payload.json || echo "000")
+          if [ "$http_code" != "200" ]; then
+            echo "API Gateway smoke test failed with HTTP $http_code"
             cat /tmp/smoke-body.json
             exit 1
-          done
+          fi
+          python3 -c "import json; d=json.load(open('/tmp/smoke-body.json')); assert d.get('results'), d; print('api smoke ok:', d['results'][0]['scores'].keys())"

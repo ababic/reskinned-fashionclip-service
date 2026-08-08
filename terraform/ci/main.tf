@@ -97,6 +97,7 @@ resource "aws_iam_role_policy" "github_deploy" {
           "lambda:UpdateFunctionConfiguration",
           "lambda:GetFunction",
           "lambda:GetFunctionConfiguration",
+          "lambda:InvokeFunction",
         ]
         Resource = [
           "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:reskinned-fashionclip-service-staging",
