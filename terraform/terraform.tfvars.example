@@ -1,0 +1,3 @@
+environment  = "staging"
+aws_region   = "eu-west-1"
+sentry_dsn   = "https://example@o200973.ingest.us.sentry.io/0"

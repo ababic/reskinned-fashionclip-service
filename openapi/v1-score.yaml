@@ -1,0 +1,95 @@
+openapi: 3.0.3
+info:
+  title: Reskinned FashionCLIP Scorer
+  version: "1"
+  description: |
+    POST product image URLs with attribute label pools; receive ranked FashionCLIP scores.
+    Thresholding and promotion policy live in reskinned-inventory (PRINT_VISION_*).
+servers:
+  - url: https://{apiId}.execute-api.eu-west-1.amazonaws.com/prod
+    variables:
+      apiId:
+        default: example
+paths:
+  /v1/score:
+    post:
+      summary: Score images against label pools
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScoreRequest"
+      responses:
+        "200":
+          description: At least one image scored successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScoreResponse"
+        "400":
+          description: Invalid request body
+        "422":
+          description: All images failed to score
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+  schemas:
+    ScoreRequest:
+      type: object
+      required: [images, pools]
+      properties:
+        images:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            type: object
+            required: [url]
+            properties:
+              url:
+                type: string
+                format: uri
+        pools:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 3
+    ScoreResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              image_index:
+                type: integer
+              url:
+                type: string
+              scores:
+                type: object
+                additionalProperties:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      value:
+                        type: string
+                      score:
+                        type: number
+        errors:
+          type: array
+          items:
+            type: object

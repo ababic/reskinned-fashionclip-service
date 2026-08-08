@@ -1,0 +1,17 @@
+.env
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+terraform/terraform.tfvars
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+.DS_Store
+.idea/
+.vscode/
+!/.vscode/settings.json
+!/.vscode/extensions.json

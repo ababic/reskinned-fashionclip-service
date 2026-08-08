@@ -1,0 +1,1 @@
+"""Reskinned FashionCLIP service package."""
