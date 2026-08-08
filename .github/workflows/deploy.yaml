@@ -1,0 +1,78 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    env:
+      AWS_REGION: eu-west-1
+      AWS_ACCOUNT_ID: "830566885523"
+      ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      ECR_REPOSITORY: reskinned-fashionclip-service-${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      LAMBDA_FUNCTION: reskinned-fashionclip-service-${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          IMAGE_URI: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+        run: |
+          docker build --platform linux/arm64 \
+            --build-arg HF_TOKEN="$HF_TOKEN" \
+            -t "$IMAGE_URI" \
+            .
+          docker push "$IMAGE_URI"
+
+      - name: Update Lambda function code
+        env:
+          IMAGE_URI: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:latest
+        run: |
+          aws lambda update-function-code \
+            --function-name "$LAMBDA_FUNCTION" \
+            --image-uri "$IMAGE_URI" \
+            --region "$AWS_REGION"
+          aws lambda wait function-updated \
+            --function-name "$LAMBDA_FUNCTION" \
+            --region "$AWS_REGION"
+
+      - name: Smoke test /v1/score
+        env:
+          PRINT_VISION_URL: ${{ vars.PRINT_VISION_URL }}
+          PRINT_VISION_API_KEY: ${{ secrets.PRINT_VISION_API_KEY }}
+        run: |
+          if [ -z "$PRINT_VISION_URL" ] || [ -z "$PRINT_VISION_API_KEY" ]; then
+            echo "Skipping smoke test — set environment vars PRINT_VISION_URL and secret PRINT_VISION_API_KEY."
+            exit 0
+          fi
+          body=$(curl -fsS -X POST "$PRINT_VISION_URL" \
+            -H "content-type: application/json" \
+            -H "x-api-key: $PRINT_VISION_API_KEY" \
+            -d '{"images":[{"url":"https://cdn.shopify.com/s/files/1/0081/8711/7664/files/Dayflex_leggingpantnofrontseam_shadowblack_10189.jpg?v=1744812821"}],"pools":{"pattern-application":["Placement print","All-over print"],"pattern":["Floral","Striped"]},"top_k":3}')
+          echo "$body" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('results'), d; print('smoke ok:', d['results'][0]['scores'].keys())"

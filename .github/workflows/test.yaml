@@ -3,7 +3,9 @@ name: Test
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - staging
 
 jobs:
   test:

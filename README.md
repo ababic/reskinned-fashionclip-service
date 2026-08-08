@@ -58,13 +58,20 @@ Behaviour notes:
 
 ## Deploy
 
+| Branch | Target |
+|--------|--------|
+| `staging` | Staging Lambda + ECR (`reskinned-fashionclip-service-staging`) |
+| `main` | Production Lambda + ECR (`reskinned-fashionclip-service-production`) |
+
+Pushes to those branches run **Test** then **Deploy** via GitHub Actions. One-time setup: apply `terraform/ci` and configure repository variables — see [`terraform/ci/README.md`](terraform/ci/README.md).
+
+Manual deploy:
+
 ```bash
 just build-image environment=reskinned-fashionclip-service-staging
 just push-image environment=reskinned-fashionclip-service-staging
 just update-lambda
 ```
-
-Production: swap `environment=reskinned-fashionclip-service-production`.
 
 ---
 

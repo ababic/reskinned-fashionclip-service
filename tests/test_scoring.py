@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from src.scoring import ImageUnavailableError, _normalise_to_unit_interval, _prompt_for_label
+from src.scoring import (
+    ImageUnavailableError,
+    _normalise_to_unit_interval,
+    _prompt_for_label,
+)
 
 
 def test_normalise_to_unit_interval() -> None:

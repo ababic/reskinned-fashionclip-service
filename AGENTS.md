@@ -21,12 +21,14 @@ just build-image    # arm64 Docker; optional HF_TOKEN in .env
 | `terraform/` | ECR + Lambda + API Gateway per `environment` var |
 | `Dockerfile` | Multi-stage arm64 image with baked model |
 
-## Constraints
+## CI / deploy
 
-- **CPU torch only** — use `[[tool.uv.index]]` pytorch-cpu in `pyproject.toml`; never default PyPI torch (CUDA ~8GB).
-- **arm64** image + Lambda `architectures = ["arm64"]`.
-- Do not commit `.env`, `terraform/terraform.tfvars`, or `*.tfstate`.
-- Terraform stacks already exist in AWS — import before `apply` (see `terraform/README.md`).
+| Workflow | Trigger | Action |
+|----------|---------|--------|
+| `test.yaml` | PR + push to `main`/`staging` | ruff + pytest |
+| `deploy.yaml` | push to `main`/`staging` | ECR push + Lambda update |
+
+Configure GitHub per `terraform/ci/README.md` (`AWS_DEPLOY_ROLE_ARN`, optional `HF_TOKEN`, environment `PRINT_VISION_URL`).
 
 ## Sentry
 

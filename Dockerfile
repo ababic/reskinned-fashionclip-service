@@ -5,7 +5,7 @@ FROM public.ecr.aws/lambda/python:3.12-arm64 AS builder
 
 WORKDIR /var/task
 
-RUN dnf install -y git && dnf clean all
+RUN dnf install -y git findutils && dnf clean all
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
