@@ -27,9 +27,10 @@ snapshot_download(
     allow_patterns=[
         "config.json",
         "model.safetensors",
-        "processor_config.json",
+        "preprocessor_config.json",
         "tokenizer.json",
         "tokenizer_config.json",
+        "special_tokens_map.json",
     ],
 )
 PY
