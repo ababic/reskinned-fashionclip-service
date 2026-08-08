@@ -4,6 +4,8 @@ Lambda-side print-vision scorer. Inventory owns promotion policy (`PRINT_VISION_
 
 ## Commands
 
+Open **`reskinned-fashionclip-service.code-workspace`** in Cursor for editor settings (Python, Ruff, pytest).
+
 ```bash
 uv sync --group dev
 just test

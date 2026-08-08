@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: pytest",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "Python: current test file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${relativeFile}", "-q"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    }
+  ]
+}

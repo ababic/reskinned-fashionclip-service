@@ -1,0 +1,20 @@
+---
+description: Router — project defaults for FashionCLIP service agents
+alwaysApply: true
+---
+
+# Agent router
+
+Read **`AGENTS.md`** for commands, layout, CI, and Sentry — not the whole README unless needed.
+
+| Topic | Where |
+|-------|--------|
+| Python style | `.cursor/rules/python-conventions.mdc` |
+| Local dev | `just sync`, `just test`, `just lint` (or `uv` equivalents) |
+| Docker / Lambda image | `just build-image`, `just push-image`, `just update-lambda` |
+| CI deploy | `.github/workflows/` + `terraform/ci/README.md` |
+| Cloud Agent install | `.cursor/environment.json` |
+
+**Non-negotiable:** imports at module top (inline only for circular imports); run commands yourself; CPU-only `torch` via `pyproject.toml` pytorch-cpu index.
+
+Open **`reskinned-fashionclip-service.code-workspace`** in Cursor for Python/Ruff/pytest settings and extension recommendations.

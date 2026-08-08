@@ -12,6 +12,11 @@ __pycache__/
 *.egg-info/
 .DS_Store
 .idea/
-.vscode/
-!/.vscode/settings.json
-!/.vscode/extensions.json
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+
+# Committed Cursor rules (may be ignored by a global ~/.gitignore_global)
+!.cursor/rules/
+!.cursor/rules/**
