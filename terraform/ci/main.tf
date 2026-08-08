@@ -48,10 +48,13 @@ resource "aws_iam_role" "github_deploy" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:aud"        = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:repository" = "wearecrew/reskinned-fashionclip-service"
         }
+        # GitHub OIDC sub uses org/repo IDs, e.g.
+        # repo:wearecrew@5812276/reskinned-fashionclip-service@1323957910:environment:production
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:wearecrew/reskinned-fashionclip-service:*"
+          "token.actions.githubusercontent.com:sub" = "repo:wearecrew@*/reskinned-fashionclip-service@*:*"
         }
       }
     }]

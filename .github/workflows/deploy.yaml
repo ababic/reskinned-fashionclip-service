@@ -30,29 +30,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mint OIDC token
-        id: oidc-token
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const token = await core.getIDToken('sts.amazonaws.com');
-            core.setOutput('token', token);
-
-      - name: Debug OIDC token claims
-        run: |
-          python3 - <<'PY'
-          import base64, json, os
-
-          token = os.environ["OIDC_TOKEN"]
-          payload = token.split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-          for key in ("sub", "aud", "repository", "environment", "ref", "workflow"):
-              print(f"{key}={claims.get(key)!r}")
-          PY
-        env:
-          OIDC_TOKEN: ${{ steps.oidc-token.outputs.token }}
-
       - name: Resolve deploy role ARN
         id: deploy-role
         env:
