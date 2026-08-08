@@ -5,6 +5,13 @@ on:
     branches:
       - main
       - staging
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - src/**
+  workflow_dispatch:
 
 concurrency:
   group: deploy-${{ github.ref_name }}
