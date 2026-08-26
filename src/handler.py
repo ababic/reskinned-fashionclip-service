@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import sentry_sdk
 from sentry_sdk.integrations.aws_lambda import AwsLambdaIntegration
 
-from src.scoring import ImageUnavailableError, _load_clip_components, score_pools_for_image, score_pools_for_images
+from src.scoring import ImageUnavailableError, _load_clip_components, score_pools_for_images
 
 _MAX_IMAGES = 2
 _MAX_BATCH_ITEMS = 16
@@ -145,34 +145,40 @@ def _score_one_request(
     results: list[dict[str, object]] = []
     errors: list[dict[str, object]] = []
 
+    try:
+        scores_by_index, image_errors = score_pools_for_images(
+            image_urls=image_urls,
+            pools=pools,
+            top_k=top_k,
+        )
+    except Exception as exc:  # noqa: BLE001 — one model failure must produce a useful response
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("vision.operation", "score")
+            sentry_sdk.capture_exception(exc)
+        return [], [
+            {
+                "image_index": idx,
+                "url": image_url,
+                "error": "scoring_failed",
+                "detail": str(exc),
+            }
+            for idx, image_url in enumerate(image_urls)
+        ]
+
     for idx, image_url in enumerate(image_urls):
-        try:
-            scores = score_pools_for_image(image_url=image_url, pools=pools, top_k=top_k)
-        except ImageUnavailableError as exc:
-            # Expected upstream/data issue (404, timeout, non-image bytes) — return in
-            # `errors` for the client, do not alert Sentry.
+        if idx in image_errors:
+            error = image_errors[idx]
             errors.append(
                 {
                     "image_index": idx,
                     "url": image_url,
                     "error": ImageUnavailableError.code,
-                    "detail": exc.detail,
+                    "detail": error.detail,
                 }
             )
             continue
-        except Exception as exc:  # noqa: BLE001 — unexpected per-image failure must not abort the batch
-            with sentry_sdk.new_scope() as scope:
-                scope.set_tag("vision.image_index", str(idx))
-                scope.set_context("vision_image", {"url": image_url, "index": idx})
-                sentry_sdk.capture_exception(exc)
-            errors.append(
-                {
-                    "image_index": idx,
-                    "url": image_url,
-                    "error": "scoring_failed",
-                    "detail": str(exc),
-                }
-            )
+        scores = scores_by_index.get(idx)
+        if scores is None:
             continue
         results.append({"image_index": idx, "url": image_url, "scores": scores})
     return results, errors

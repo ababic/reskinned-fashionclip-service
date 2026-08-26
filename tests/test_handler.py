@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import pytest
 
@@ -84,10 +83,16 @@ def test_lambda_handler_invalid_request() -> None:
 
 
 def test_lambda_handler_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_score(*, image_url: str, pools: dict[str, list[str]], top_k: int) -> dict[str, Any]:
-        return {"pattern": [{"value": "Floral", "score": 0.9}]}
+    def _fake_score(
+        *,
+        image_urls: list[str],
+        pools: dict[str, list[str]],
+        top_k: int,
+    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
+        assert image_urls == ["https://example.com/a.jpg"]
+        return ({0: {"pattern": [{"value": "Floral", "score": 0.9}]}}, {})
 
-    monkeypatch.setattr("src.handler.score_pools_for_image", _fake_score)
+    monkeypatch.setattr("src.handler.score_pools_for_images", _fake_score)
 
     response = lambda_handler(
         {
@@ -167,11 +172,57 @@ def test_lambda_handler_batch_success_and_image_failure(monkeypatch: pytest.Monk
     assert body["items"][0]["errors"][0]["error"] == "image_unavailable"
 
 
+def test_lambda_handler_score_batches_images_in_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def _fake_score(
+        *,
+        image_urls: list[str],
+        pools: dict[str, list[str]],
+        top_k: int,
+    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
+        calls.append(image_urls)
+        return (
+            {
+                0: {"pattern": [{"value": "Floral", "score": 0.9}]},
+                1: {"pattern": [{"value": "Stripe", "score": 0.8}]},
+            },
+            {},
+        )
+
+    monkeypatch.setattr("src.handler.score_pools_for_images", _fake_score)
+
+    response = lambda_handler(
+        {
+            "body": json.dumps(
+                {
+                    "images": [
+                        {"url": "https://example.com/a.jpg"},
+                        {"url": "https://example.com/b.jpg"},
+                    ],
+                    "pools": {"pattern": ["Floral", "Stripe"]},
+                }
+            )
+        },
+        None,
+    )
+
+    assert response["statusCode"] == 200
+    assert calls == [["https://example.com/a.jpg", "https://example.com/b.jpg"]]
+    body = json.loads(response["body"])
+    assert len(body["results"]) == 2
+
+
 def test_lambda_handler_all_images_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fail(*, image_url: str, pools: dict[str, list[str]], top_k: int) -> dict[str, Any]:
+    def _fail(
+        *,
+        image_urls: list[str],
+        pools: dict[str, list[str]],
+        top_k: int,
+    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("src.handler.score_pools_for_image", _fail)
+    monkeypatch.setattr("src.handler.score_pools_for_images", _fail)
 
     response = lambda_handler(
         {
