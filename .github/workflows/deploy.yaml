@@ -150,6 +150,7 @@ jobs:
           PY
           echo "Warming Lambda via direct invoke (cold start can take ~60–90s)..."
           aws lambda invoke \
+            --cli-binary-format raw-in-base64-out \
             --function-name "$LAMBDA_FUNCTION" \
             --region "$AWS_REGION" \
             --payload file:///tmp/smoke-event.json \
