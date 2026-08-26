@@ -1,0 +1,17 @@
+---
+description: Python conventions for this service
+globs: "{src,tests}/**/*.py"
+alwaysApply: false
+---
+
+# Python conventions
+
+Canonical detail: **`AGENTS.md`**.
+
+- **Consolidated logic:** one obvious function per workflow; avoid tiny one-off helpers.
+- **Imports:** module top only; inline only for genuine circular imports (with a brief comment).
+- **Types:** annotate new functions; prefer `from __future__ import annotations` and `list[str]` / `str | None`.
+- **Lint:** `just lint` or `uv run ruff check .` after edits; hooks run Ruff on agent stop.
+- **Tests:** `tests/` with pytest; mock torch/network in unit tests — CI does not load the model.
+
+Do not pin torch from default PyPI (CUDA); use the `pytorch-cpu` index in `pyproject.toml`.

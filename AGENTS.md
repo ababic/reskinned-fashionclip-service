@@ -4,6 +4,8 @@ Lambda-side print-vision scorer. Inventory owns promotion policy (`PRINT_VISION_
 
 ## Commands
 
+Open **`reskinned-fashionclip-service.code-workspace`** in Cursor for editor settings (Python, Ruff, pytest).
+
 ```bash
 uv sync --group dev
 just test
@@ -26,9 +28,9 @@ just build-image    # arm64 Docker; optional HF_TOKEN in .env
 | Workflow | Trigger | Action |
 |----------|---------|--------|
 | `test.yaml` | PR + push to `main`/`staging` | ruff + pytest |
-| `deploy.yaml` | push to `main`/`staging` | ECR push + Lambda update |
+| `deploy.yaml` | push to `main`/`staging` when runtime files change, or manual `workflow_dispatch` | ECR push + Lambda update |
 
-Configure GitHub per `terraform/ci/README.md` (`AWS_DEPLOY_ROLE_ARN`, optional `HF_TOKEN`, environment `PRINT_VISION_URL`).
+Configure GitHub per `terraform/ci/README.md` — repo **secret** `AWS_DEPLOY_ROLE_ARN` (or variable), optional `HF_TOKEN`, environment `PRINT_VISION_URL`. Deploy sets `SENTRY_RELEASE` to the git SHA on each Lambda update.
 
 ## Sentry
 

@@ -10,8 +10,9 @@ RUN dnf install -y git findutils && dnf clean all
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
+RUN uv sync --frozen --no-dev --no-install-project
 
+COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 # Bake FashionCLIP as safetensors only (offline at runtime).
@@ -27,9 +28,10 @@ snapshot_download(
     allow_patterns=[
         "config.json",
         "model.safetensors",
-        "processor_config.json",
+        "preprocessor_config.json",
         "tokenizer.json",
         "tokenizer_config.json",
+        "special_tokens_map.json",
     ],
 )
 PY
@@ -53,6 +55,7 @@ ENV PATH=/var/task/.venv/bin:/var/lang/bin:/usr/local/bin:/usr/bin/:/bin:/opt/bi
     TORCH_DISABLE_SHARE_RDZV_TCP_STORE=1
 
 COPY --from=builder /var/task/.venv /var/task/.venv
+COPY --from=builder /var/task/src /var/task/src
 COPY --from=builder /var/task/models /var/task/models
 
 CMD ["src.handler.lambda_handler"]

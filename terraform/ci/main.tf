@@ -20,13 +20,19 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 data "tls_certificate" "github_actions" {
-  url = "https://token.actions.githubusercontent.com/.well-known/openid-configuration"
+  url = "https://token.actions.githubusercontent.com"
 }
 
 resource "aws_iam_openid_connect_provider" "github_actions" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.github_actions.certificates[0].sha1_fingerprint]
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  # Root + intermediate thumbprints per GitHub/AWS OIDC docs; tls data is fallback.
+  thumbprint_list = distinct(concat(
+    [
+      "6938fd4d98bab03faadb97b34396831e3780aea1",
+    ],
+    [for cert in data.tls_certificate.github_actions.certificates : cert.sha1_fingerprint],
+  ))
 }
 
 resource "aws_iam_role" "github_deploy" {
@@ -42,10 +48,13 @@ resource "aws_iam_role" "github_deploy" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:aud"        = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:repository" = "wearecrew/reskinned-fashionclip-service"
         }
+        # GitHub OIDC sub uses org/repo IDs, e.g.
+        # repo:wearecrew@5812276/reskinned-fashionclip-service@1323957910:environment:production
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:wearecrew/reskinned-fashionclip-service:*"
+          "token.actions.githubusercontent.com:sub" = "repo:wearecrew@*/reskinned-fashionclip-service@*:*"
         }
       }
     }]
@@ -85,7 +94,10 @@ resource "aws_iam_role_policy" "github_deploy" {
         Effect = "Allow"
         Action = [
           "lambda:UpdateFunctionCode",
+          "lambda:UpdateFunctionConfiguration",
           "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:InvokeFunction",
         ]
         Resource = [
           "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:reskinned-fashionclip-service-staging",

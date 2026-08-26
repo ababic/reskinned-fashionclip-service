@@ -94,9 +94,23 @@ resource "aws_api_gateway_resource" "score" {
   path_part   = "score"
 }
 
+resource "aws_api_gateway_resource" "score_batch" {
+  rest_api_id = aws_api_gateway_rest_api.service.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "score-batch"
+}
+
 resource "aws_api_gateway_method" "score_post" {
   rest_api_id      = aws_api_gateway_rest_api.service.id
   resource_id      = aws_api_gateway_resource.score.id
+  http_method      = "POST"
+  authorization    = "NONE"
+  api_key_required = true
+}
+
+resource "aws_api_gateway_method" "score_batch_post" {
+  rest_api_id      = aws_api_gateway_rest_api.service.id
+  resource_id      = aws_api_gateway_resource.score_batch.id
   http_method      = "POST"
   authorization    = "NONE"
   api_key_required = true
@@ -111,6 +125,15 @@ resource "aws_api_gateway_integration" "score_lambda" {
   uri                     = aws_lambda_function.service.invoke_arn
 }
 
+resource "aws_api_gateway_integration" "score_batch_lambda" {
+  rest_api_id             = aws_api_gateway_rest_api.service.id
+  resource_id             = aws_api_gateway_resource.score_batch.id
+  http_method             = aws_api_gateway_method.score_batch_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.service.invoke_arn
+}
+
 resource "aws_api_gateway_deployment" "service" {
   rest_api_id = aws_api_gateway_rest_api.service.id
 
@@ -119,6 +142,9 @@ resource "aws_api_gateway_deployment" "service" {
       aws_api_gateway_resource.score.id,
       aws_api_gateway_method.score_post.id,
       aws_api_gateway_integration.score_lambda.id,
+      aws_api_gateway_resource.score_batch.id,
+      aws_api_gateway_method.score_batch_post.id,
+      aws_api_gateway_integration.score_batch_lambda.id,
     ]))
   }
 
@@ -126,7 +152,10 @@ resource "aws_api_gateway_deployment" "service" {
     create_before_destroy = true
   }
 
-  depends_on = [aws_api_gateway_integration.score_lambda]
+  depends_on = [
+    aws_api_gateway_integration.score_lambda,
+    aws_api_gateway_integration.score_batch_lambda,
+  ]
 }
 
 resource "aws_api_gateway_stage" "prod" {

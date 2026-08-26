@@ -4,17 +4,26 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import sentry_sdk
 from sentry_sdk.integrations.aws_lambda import AwsLambdaIntegration
 
-from src.scoring import ImageUnavailableError, score_pools_for_image
+from src.scoring import ImageUnavailableError, _load_clip_components, score_pools_for_image, score_pools_for_images
 
 _MAX_IMAGES = 2
+_MAX_BATCH_ITEMS = 16
 _MIN_IMAGES = 1
 _DEFAULT_TOP_K = 3
 _MAX_TOP_K = 5
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreJob:
+    key: str
+    image_urls: list[str]
+
 
 _sentry_dsn = (os.environ.get("SENTRY_DSN") or "").strip()
 if _sentry_dsn:
@@ -41,9 +50,7 @@ def _is_valid_https_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _parse_request(
-    event: dict[str, object],
-) -> tuple[list[str], dict[str, list[str]], int] | None:
+def _parse_payload(event: dict[str, object]) -> dict[str, object] | None:
     raw_body = event.get("body")
     if not isinstance(raw_body, str):
         return None
@@ -51,47 +58,90 @@ def _parse_request(
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
         return None
+    return payload if isinstance(payload, dict) else None
 
-    images = payload.get("images")
-    pools = payload.get("pools")
-    top_k = payload.get("top_k", _DEFAULT_TOP_K)
 
-    if not isinstance(images, list) or not (_MIN_IMAGES <= len(images) <= _MAX_IMAGES):
-        return None
-    if not isinstance(pools, dict) or not pools:
-        return None
-    if not isinstance(top_k, int) or top_k < 1:
+def _parse_images(raw_images: object, *, max_images: int = _MAX_IMAGES) -> list[str] | None:
+    if not isinstance(raw_images, list) or not (_MIN_IMAGES <= len(raw_images) <= max_images):
         return None
 
-    parsed_images: list[str] = []
-    for entry in images:
+    parsed: list[str] = []
+    for entry in raw_images:
         if not isinstance(entry, dict):
             return None
         url_value = entry.get("url")
         if not isinstance(url_value, str) or not _is_valid_https_url(url_value):
             return None
-        parsed_images.append(url_value)
+        parsed.append(url_value)
+    return parsed
 
+
+def _parse_pools(raw_pools: object) -> dict[str, list[str]] | None:
+    if not isinstance(raw_pools, dict) or not raw_pools:
+        return None
     parsed_pools: dict[str, list[str]] = {}
-    for slug, labels in pools.items():
+    for slug, labels in raw_pools.items():
         if not isinstance(slug, str) or not isinstance(labels, list):
             return None
         clean_labels = [label.strip() for label in labels if isinstance(label, str) and label.strip()]
         if clean_labels:
             parsed_pools[slug] = clean_labels
-
     if not parsed_pools:
         return None
+    return parsed_pools
 
-    return parsed_images, parsed_pools, min(top_k, _MAX_TOP_K)
+
+def _parse_top_k(raw_top_k: object) -> int | None:
+    if not isinstance(raw_top_k, int) or raw_top_k < 1:
+        return None
+    return min(raw_top_k, _MAX_TOP_K)
 
 
-def lambda_handler(event: dict[str, object], context: object) -> dict[str, object]:
-    parsed = _parse_request(event)
-    if parsed is None:
-        return _response(400, {"error": "invalid_request"})
+def _parse_request(event: dict[str, object]) -> tuple[list[str], dict[str, list[str]], int] | None:
+    payload = _parse_payload(event)
+    if payload is None:
+        return None
+    images = _parse_images(payload.get("images"))
+    pools = _parse_pools(payload.get("pools"))
+    top_k = _parse_top_k(payload.get("top_k", _DEFAULT_TOP_K))
+    if images is None or pools is None or top_k is None:
+        return None
+    return images, pools, top_k
 
-    image_urls, pools, top_k = parsed
+
+def _parse_batch_request(event: dict[str, object]) -> tuple[list[ScoreJob], dict[str, list[str]], int] | None:
+    payload = _parse_payload(event)
+    if payload is None:
+        return None
+    raw_items = payload.get("items")
+    pools = _parse_pools(payload.get("pools"))
+    top_k = _parse_top_k(payload.get("top_k", _DEFAULT_TOP_K))
+    if not isinstance(raw_items, list) or not (1 <= len(raw_items) <= _MAX_BATCH_ITEMS):
+        return None
+    if pools is None or top_k is None:
+        return None
+
+    jobs: list[ScoreJob] = []
+    seen_keys: set[str] = set()
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            return None
+        key = raw_item.get("key")
+        if not isinstance(key, str) or not key.strip() or key in seen_keys:
+            return None
+        image_urls = _parse_images(raw_item.get("images"))
+        if image_urls is None:
+            return None
+        seen_keys.add(key)
+        jobs.append(ScoreJob(key=key, image_urls=image_urls))
+    return jobs, pools, top_k
+
+
+def _score_one_request(
+    image_urls: list[str],
+    pools: dict[str, list[str]],
+    top_k: int,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     results: list[dict[str, object]] = []
     errors: list[dict[str, object]] = []
 
@@ -125,6 +175,109 @@ def lambda_handler(event: dict[str, object], context: object) -> dict[str, objec
             )
             continue
         results.append({"image_index": idx, "url": image_url, "scores": scores})
+    return results, errors
+
+
+def _score_batch_request(
+    jobs: list[ScoreJob],
+    pools: dict[str, list[str]],
+    top_k: int,
+) -> tuple[list[dict[str, object]], int]:
+    locations = [
+        (job_index, image_index, image_url)
+        for job_index, job in enumerate(jobs)
+        for image_index, image_url in enumerate(job.image_urls)
+    ]
+    try:
+        scores_by_index, image_errors = score_pools_for_images(
+            image_urls=[location[2] for location in locations],
+            pools=pools,
+            top_k=top_k,
+        )
+    except Exception as exc:  # noqa: BLE001 — one model failure must produce a useful batch response
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("vision.operation", "batch")
+            sentry_sdk.capture_exception(exc)
+        return [
+            {
+                "key": job.key,
+                "results": [],
+                "errors": [
+                    {
+                        "image_index": image_index,
+                        "url": image_url,
+                        "error": "scoring_failed",
+                        "detail": str(exc),
+                    }
+                    for image_index, image_url in enumerate(job.image_urls)
+                ],
+            }
+            for job in jobs
+        ], 0
+
+    items: list[dict[str, object]] = []
+    successful_images = 0
+    for job_index, job in enumerate(jobs):
+        item_results: list[dict[str, object]] = []
+        item_errors: list[dict[str, object]] = []
+        for flat_index, (location_job_index, image_index, image_url) in enumerate(locations):
+            if location_job_index != job_index:
+                continue
+            if flat_index in image_errors:
+                error = image_errors[flat_index]
+                item_errors.append(
+                    {
+                        "image_index": image_index,
+                        "url": image_url,
+                        "error": ImageUnavailableError.code,
+                        "detail": error.detail,
+                    }
+                )
+                continue
+            item_scores = scores_by_index.get(flat_index)
+            if item_scores is None:
+                continue
+            successful_images += 1
+            item_results.append({"image_index": image_index, "url": image_url, "scores": item_scores})
+        items.append({"key": job.key, "results": item_results, "errors": item_errors})
+    return items, successful_images
+
+
+def _warm_up() -> dict[str, object]:
+    try:
+        _load_clip_components()
+    except Exception as exc:  # noqa: BLE001 — return a useful health response to the deploy smoke test
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("vision.operation", "warmup")
+            sentry_sdk.capture_exception(exc)
+        return _response(503, {"error": "warmup_failed"})
+    return _response(200, {"status": "warm"})
+
+
+def lambda_handler(event: dict[str, object], context: object) -> dict[str, object]:
+    del context
+    payload = _parse_payload(event)
+    if payload is None:
+        return _response(400, {"error": "invalid_request"})
+    if payload.get("warmup") is True:
+        return _warm_up()
+
+    path = event.get("path") or event.get("rawPath")
+    if path == "/v1/score-batch":
+        parsed_batch = _parse_batch_request(event)
+        if parsed_batch is None:
+            return _response(400, {"error": "invalid_request"})
+        jobs, pools, top_k = parsed_batch
+        items, successful_images = _score_batch_request(jobs, pools, top_k)
+        if not successful_images:
+            return _response(422, {"error": "all_images_failed", "items": items})
+        return _response(200, {"items": items})
+
+    parsed = _parse_request(event)
+    if parsed is None:
+        return _response(400, {"error": "invalid_request"})
+    image_urls, pools, top_k = parsed
+    results, errors = _score_one_request(image_urls, pools, top_k)
 
     if not results:
         return _response(422, {"error": "all_images_failed", "results": [], "errors": errors})
