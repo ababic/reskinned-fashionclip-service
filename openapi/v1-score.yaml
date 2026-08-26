@@ -13,7 +13,7 @@ servers:
 paths:
   /v1/score:
     post:
-      summary: Score images against label pools
+      summary: Score images against label pools or warm the model
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -21,7 +21,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ScoreRequest"
+              oneOf:
+                - $ref: "#/components/schemas/ScoreRequest"
+                - $ref: "#/components/schemas/WarmupRequest"
       responses:
         "200":
           description: At least one image scored successfully
@@ -33,6 +35,28 @@ paths:
           description: Invalid request body
         "422":
           description: All images failed to score
+  /v1/score-batch:
+    post:
+      summary: Score a bounded batch of product images against shared label pools
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchScoreRequest"
+      responses:
+        "200":
+          description: At least one image scored successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchScoreResponse"
+        "400":
+          description: Invalid request body
+        "422":
+          description: All images failed to score
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -40,6 +64,13 @@ components:
       in: header
       name: x-api-key
   schemas:
+    WarmupRequest:
+      type: object
+      required: [warmup]
+      properties:
+        warmup:
+          type: boolean
+          enum: [true]
     ScoreRequest:
       type: object
       required: [images, pools]
@@ -66,6 +97,58 @@ components:
           minimum: 1
           maximum: 5
           default: 3
+    BatchScoreRequest:
+      type: object
+      required: [items, pools]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: "#/components/schemas/BatchScoreItem"
+        pools:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 3
+    BatchScoreItem:
+      type: object
+      required: [key, images]
+      properties:
+        key:
+          type: string
+        images:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            type: object
+            required: [url]
+            properties:
+              url:
+                type: string
+                format: uri
+    BatchScoreResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              results:
+                type: array
+              errors:
+                type: array
     ScoreResponse:
       type: object
       properties:
