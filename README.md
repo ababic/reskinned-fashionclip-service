@@ -10,7 +10,7 @@ Sibling consumer: [`wearecrew/reskinned-inventory`](https://github.com/wearecrew
 | Region | `eu-west-1` |
 | Package manager | [uv](https://docs.astral.sh/uv/) + locked `uv.lock` |
 | Lint / format | [Ruff](https://docs.astral.sh/ruff/) |
-| Observability | [Sentry](https://crew.sentry.io/projects/reskinned-fashionclip-service/) |
+| Observability | Sentry via `SENTRY_DSN` (see `.env.template`) |
 | Infra | Terraform (API Gateway REST + Lambda + ECR + API key) |
 
 > **Note:** This repository was reconstructed from the deployed ECR Lambda image and live AWS resource configuration (Aug 2026). Terraform describes existing staging/production stacks; import state before applying changes — see [`terraform/README.md`](terraform/README.md).
@@ -100,7 +100,7 @@ just update-lambda
 
 ## Known issue fixed in this repo
 
-Production was failing with `Could not import module 'CLIPModel'` / `RpcBackendOptions` on **torch 2.13.0+cpu** in Lambda arm64 ([Sentry RESKINNED-FASHIONCLIP-SERVICE-3](https://crew.sentry.io/issues/RESKINNED-FASHIONCLIP-SERVICE-3)). This repo pins **torch 2.5.1** (CPU index) and sets `TORCH_DISABLE_SHARE_RDZV_TCP_STORE=1`.
+Production was failing with `Could not import module 'CLIPModel'` / `RpcBackendOptions` on **torch 2.13.0+cpu** in Lambda arm64. This repo pins **torch 2.5.1** (CPU index) and sets `TORCH_DISABLE_SHARE_RDZV_TCP_STORE=1`.
 
 ---
 

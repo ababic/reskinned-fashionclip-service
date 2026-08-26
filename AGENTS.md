@@ -30,8 +30,10 @@ just build-image    # arm64 Docker; optional HF_TOKEN in .env
 | `test.yaml` | PR + push to `main`/`staging` | ruff + pytest |
 | `deploy.yaml` | push to `main`/`staging` when runtime files change, or manual `workflow_dispatch` | ECR push + Lambda update |
 
-Configure GitHub per `terraform/ci/README.md` — repo **secret** `AWS_DEPLOY_ROLE_ARN` (or variable), optional `HF_TOKEN`, environment `PRINT_VISION_URL`. Deploy sets `SENTRY_RELEASE` to the git SHA on each Lambda update.
+Configure GitHub per `terraform/ci/README.md` — repo **secret** `AWS_DEPLOY_ROLE_ARN` (or variable), repo **variable** `AWS_ACCOUNT_ID`, optional `HF_TOKEN`, environment `PRINT_VISION_URL`. Deploy sets `SENTRY_RELEASE` to the git SHA on each Lambda update.
+
+Manual image deploy also requires `export AWS_ACCOUNT_ID=…` for `just build-image` / `just push-image`.
 
 ## Sentry
 
-Project: `reskinned-fashionclip-service`. Commit messages may include `Fixes RESKINNED-FASHIONCLIP-SERVICE-N`.
+Set `SENTRY_DSN` in Lambda environment / local `.env`. Optional commit trailers like `Fixes <project>-N` can link deploys to issues when your Sentry project is configured.
