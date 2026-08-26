@@ -13,6 +13,7 @@ Then in GitHub → **Settings → Secrets and variables → Actions**:
 | Kind | Name | Value |
 |------|------|--------|
 | Secret | `AWS_DEPLOY_ROLE_ARN` | `terraform output -raw github_deploy_role_arn` |
+| Variable | `AWS_ACCOUNT_ID` | AWS account id for ECR image URIs in deploy |
 | Secret | `HF_TOKEN` | Hugging Face token (optional; speeds model bake) |
 | Secret | `PRINT_VISION_API_KEY` | API Gateway key (optional repo secret; per-environment secret preferred for smoke test) |
 

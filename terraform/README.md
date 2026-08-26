@@ -4,8 +4,8 @@ Describes the **existing** staging and production stacks in `eu-west-1`:
 
 | Environment | Lambda | API Gateway id | ECR repo |
 |-------------|--------|----------------|----------|
-| staging | `reskinned-fashionclip-service-staging` | `6dqkwpp851` | `reskinned-fashionclip-service-staging` |
-| production | `reskinned-fashionclip-service-production` | `6jmeqxjis0` | `reskinned-fashionclip-service-production` |
+| staging | `reskinned-fashionclip-service-staging` | *(see AWS console)* | `reskinned-fashionclip-service-staging` |
+| production | `reskinned-fashionclip-service-production` | *(see AWS console)* | `reskinned-fashionclip-service-production` |
 
 ## First-time state (after repo recovery)
 

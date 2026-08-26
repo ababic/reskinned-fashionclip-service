@@ -2,7 +2,7 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 default_ecr_repo := "reskinned-fashionclip-service-staging"
 aws_region := "eu-west-1"
-aws_account := "830566885523"
+aws_account := env_var('AWS_ACCOUNT_ID')
 
 sync:
     uv sync --group dev
@@ -57,4 +57,4 @@ smoke:
     curl -sS -X POST "$PRINT_VISION_URL" \
         -H "content-type: application/json" \
         -H "x-api-key: $PRINT_VISION_API_KEY" \
-        -d '{"images":[{"url":"https://cdn.shopify.com/s/files/1/0081/8711/7664/files/Dayflex_leggingpantnofrontseam_shadowblack_10189.jpg?v=1744812821"}],"pools":{"pattern-application":["Placement print","All-over print"],"pattern":["Floral","Striped"]},"top_k":3}'
+        -d '{"images":[{"url":"https://example.com/garment.jpg"}],"pools":{"pattern-application":["Placement print","All-over print"],"pattern":["Floral","Striped"]},"top_k":3}'
