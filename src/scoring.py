@@ -117,9 +117,7 @@ def _score_loaded_images(
         image_embeddings = model.get_image_features(**image_batch)
     image_embeddings = image_embeddings / image_embeddings.norm(dim=-1, keepdim=True)
 
-    scores_by_index: dict[int, dict[str, list[dict[str, float | str]]]] = {
-        index: {} for index in ordered_indices
-    }
+    scores_by_index: dict[int, dict[str, list[dict[str, float | str]]]] = {index: {} for index in ordered_indices}
     for slug, labels in pools.items():
         if not labels:
             continue

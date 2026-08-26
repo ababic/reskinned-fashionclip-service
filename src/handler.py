@@ -24,6 +24,7 @@ class ScoreJob:
     key: str
     image_urls: list[str]
 
+
 _sentry_dsn = (os.environ.get("SENTRY_DSN") or "").strip()
 if _sentry_dsn:
     sentry_sdk.init(
