@@ -1,6 +1,6 @@
 # Reskinned FashionCLIP Service
 
-AWS Lambda HTTP scorer for Reskinned **print / pattern classification**. Inventory posts product image URLs + label pools; this service returns ranked FashionCLIP scores only.
+AWS Lambda HTTP scorer for Reskinned **print / pattern classification**. Inventory posts product image URLs + label pools; this service returns ranked FashionCLIP scores only. Each pool slug is a closed taxonomy with an aspect-specific CLIP caption.
 
 Sibling consumer: [`wearecrew/reskinned-inventory`](https://github.com/wearecrew/reskinned-inventory) (`PRINT_VISION_URL` / `PRINT_VISION_API_KEY`).
 
@@ -10,7 +10,7 @@ Sibling consumer: [`wearecrew/reskinned-inventory`](https://github.com/wearecrew
 | Region | `eu-west-1` |
 | Package manager | [uv](https://docs.astral.sh/uv/) + locked `uv.lock` |
 | Lint / format | [Ruff](https://docs.astral.sh/ruff/) |
-| Observability | Sentry via `SENTRY_DSN` (see `.env.template`) |
+| Observability | [Sentry](https://crew.sentry.io/projects/reskinned-fashionclip-service/) |
 | Infra | Terraform (API Gateway REST + Lambda + ECR + API key) |
 
 > **Note:** This repository was reconstructed from the deployed ECR Lambda image and live AWS resource configuration (Aug 2026). Terraform describes existing staging/production stacks; import state before applying changes — see [`terraform/README.md`](terraform/README.md).
@@ -26,16 +26,20 @@ cp .env.template .env  # optional HF_TOKEN / SENTRY_DSN for local work
 uv sync --group dev
 just test
 just lint
+just eval   # optional; loads FashionCLIP, not part of CI
 ```
 
 ---
 
 ## API
 
+Full guide: **[`docs/api.md`](docs/api.md)** — pools, optional catalog/style classifiers, `score` / `gap` / `p`, errors, and examples.
+
+OpenAPI contract: [`openapi/v1-score.yaml`](openapi/v1-score.yaml).
+
 - **Method:** `POST` only
 - **Path:** `/v1/score`
 - **Auth:** `x-api-key: <PRINT_VISION_API_KEY>` (API Gateway key required)
-- **Contract:** [`openapi/v1-score.yaml`](openapi/v1-score.yaml)
 
 ```bash
 curl -sS -X POST "$PRINT_VISION_URL" \
@@ -43,7 +47,10 @@ curl -sS -X POST "$PRINT_VISION_URL" \
   -H "x-api-key: $PRINT_VISION_API_KEY" \
   -d '{
     "images": [{"url": "https://example.com/garment.jpg"}],
-    "pools": {"pattern": ["Floral", "Stripe", "Plain"]},
+    "pools": {
+      "pattern-application": ["Placement print", "All-over print"],
+      "pattern": ["Floral", "Striped", "Plain"]
+    },
     "top_k": 3
   }'
 ```
@@ -70,12 +77,24 @@ curl -sS -X POST "$PRINT_VISION_BATCH_URL" \
   }'
 ```
 
+| Slug | Role |
+|------|------|
+| `pattern-application`, `pattern` | Print facets (inventory today) |
+| `colour` (`color`) | Model colour opinion — opt-in; see docs |
+| `subjects` | Graphic-theme catalog — opt-in (`"subjects": []`); do not send `graphic-theme` |
+| `product-type` (`product_type`) | Garment category — opt-in; 141 types + optional extras |
+| `sleeve-length`, `neckline` | Garment style — opt-in; fixed vocabularies |
+| `trouser-length`, `skirt-length`, `dress-length` | Garment length — opt-in; fixed vocabularies |
+| `shorts-style` | Shorts silhouette/use — opt-in; cargo, running, denim, cycling, etc. |
+
 Behaviour notes:
 
 - Single-item requests accept 1–2 images; per-image failures are isolated (partial `200` with `errors`, or `422` if all fail).
 - Batch requests return per-item results and errors and preserve the supplied item keys.
-- Thresholding / agreement / promotion stay in **inventory**, not here.
+- Thresholding / agreement / promotion stay in **inventory** (`PRINT_VISION_*`).
 - Model weights are **baked into the image**; runtime is offline to Hugging Face (`HF_HUB_OFFLINE=1`).
+
+Optional live-model eval: [`eval/README.md`](eval/README.md).
 
 ---
 
@@ -100,7 +119,7 @@ just update-lambda
 
 ## Known issue fixed in this repo
 
-Production was failing with `Could not import module 'CLIPModel'` / `RpcBackendOptions` on **torch 2.13.0+cpu** in Lambda arm64. This repo pins **torch 2.5.1** (CPU index) and sets `TORCH_DISABLE_SHARE_RDZV_TCP_STORE=1`.
+Production was failing with `Could not import module 'CLIPModel'` / `RpcBackendOptions` on **torch 2.13.0+cpu** in Lambda arm64 ([Sentry RESKINNED-FASHIONCLIP-SERVICE-3](https://crew.sentry.io/issues/RESKINNED-FASHIONCLIP-SERVICE-3)). This repo pins **torch 2.5.1** (CPU index) and sets `TORCH_DISABLE_SHARE_RDZV_TCP_STORE=1`.
 
 ---
 

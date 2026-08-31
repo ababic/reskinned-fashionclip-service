@@ -10,6 +10,10 @@ sync:
 test:
     uv run pytest -q
 
+# Live FashionCLIP fixture eval — not CI. Needs network + model weights.
+eval *args:
+    uv run python -m eval.run {{args}}
+
 lint:
     uv run ruff check .
     uv run ruff format --check .
