@@ -1,6 +1,6 @@
 # AGENTS.md — Reskinned FashionCLIP Service
 
-Lambda-side print-vision scorer. Inventory owns promotion policy (`PRINT_VISION_*`). Optional pools: `subjects`, `colour`, `product-type` (built-in vocabs; see `docs/api.md`).
+Lambda-side print-vision scorer. Inventory owns promotion policy (`PRINT_VISION_*`). Optional classifiers: `subjects`, `colour`, `product-type`, `embellishment` (service-owned vocabs; see `docs/api.md`).
 
 ## Commands
 
@@ -21,7 +21,7 @@ just build-image    # arm64 Docker; optional HF_TOKEN in .env
 | `src/handler.py` | API Gateway Lambda entry (`/v1/score`) |
 | `src/scoring.py` | FashionCLIP scoring (lazy model load) |
 | `src/taxonomies.py` | Accepted pool slugs + aspect-specific CLIP captions |
-| `docs/api.md` | Human-readable API guide (pools, subjects, colour, scoring fields) |
+| `docs/api.md` | Human-readable API guide (`options`, subjects, colour, scoring fields) |
 | `eval/` | Optional labeled-fixture harness (`just eval`); not CI |
 | `openapi/v1-score.yaml` | OpenAPI contract |
 | `terraform/` | ECR + Lambda + API Gateway per `environment` var |

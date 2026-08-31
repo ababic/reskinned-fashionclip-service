@@ -18,7 +18,6 @@ from eval.judge import compare_styles, judge_result, summarise_runs
 from src.scoring import score_pools_for_image
 
 _DEFAULT_FIXTURES = Path(__file__).resolve().parent / "fixtures.jsonl"
-_DEFAULT_TOP_K = 5
 
 
 def load_fixtures(path: Path) -> list[dict[str, Any]]:
@@ -37,11 +36,20 @@ def load_fixtures(path: Path) -> list[dict[str, Any]]:
     return fixtures
 
 
-def score_fixture(fixture: dict[str, Any], *, caption_style: str, top_k: int) -> dict[str, Any]:
+def _enabled_slugs(fixture: dict[str, Any]) -> tuple[str, ...]:
+    raw_options = fixture.get("options")
+    if isinstance(raw_options, dict):
+        return tuple(slug for slug, enabled in raw_options.items() if enabled is True)
+    raw_pools = fixture.get("pools")
+    if isinstance(raw_pools, dict):
+        return tuple(raw_pools)
+    return ()
+
+
+def score_fixture(fixture: dict[str, Any], *, caption_style: str) -> dict[str, Any]:
     scored = score_pools_for_image(
         image_url=str(fixture["image_url"]),
-        pools=dict(fixture.get("pools") or {}),
-        top_k=top_k,
+        enabled_slugs=_enabled_slugs(fixture),
         caption_style=caption_style,
     )
     expect = dict(fixture.get("expect") or {})
@@ -54,8 +62,8 @@ def score_fixture(fixture: dict[str, Any], *, caption_style: str, top_k: int) ->
     }
 
 
-def run_suite(fixtures: list[dict[str, Any]], *, caption_style: str, top_k: int) -> dict[str, Any]:
-    runs = [score_fixture(fixture, caption_style=caption_style, top_k=top_k) for fixture in fixtures]
+def run_suite(fixtures: list[dict[str, Any]], *, caption_style: str) -> dict[str, Any]:
+    runs = [score_fixture(fixture, caption_style=caption_style) for fixture in fixtures]
     return {"caption_style": caption_style, "summary": summarise_runs(runs), "runs": runs}
 
 
@@ -80,7 +88,6 @@ def main(argv: list[str] | None = None) -> int:
         default="none",
         help="Also score with the old shared 'a garment with {label}' caption.",
     )
-    parser.add_argument("--top-k", type=int, default=_DEFAULT_TOP_K)
     args = parser.parse_args(argv)
 
     fixtures = load_fixtures(args.fixtures)
@@ -88,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no fixtures in {args.fixtures}", file=sys.stderr)
         return 1
 
-    taxonomy = run_suite(fixtures, caption_style="taxonomy", top_k=args.top_k)
+    taxonomy = run_suite(fixtures, caption_style="taxonomy")
     report: dict[str, Any] = {"taxonomy": taxonomy}
     _print_summary("taxonomy", taxonomy["summary"])
     for run in taxonomy["runs"]:
@@ -97,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {run['id']}: " + (", ".join(bits) if bits else "no expectations"))
 
     if args.baseline == "generic":
-        generic = run_suite(fixtures, caption_style="generic", top_k=args.top_k)
+        generic = run_suite(fixtures, caption_style="generic")
         report["generic"] = generic
         report["compare"] = compare_styles(taxonomy, generic)
         _print_summary("generic  ", generic["summary"])

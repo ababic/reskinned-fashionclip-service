@@ -61,4 +61,4 @@ smoke:
     curl -sS -X POST "$PRINT_VISION_URL" \
         -H "content-type: application/json" \
         -H "x-api-key: $PRINT_VISION_API_KEY" \
-        -d '{"images":[{"url":"https://example.com/garment.jpg"}],"pools":{"pattern-application":["Placement print","All-over print"],"pattern":["Floral","Striped"]},"top_k":3}'
+        -d '{"images":[{"url":"https://example.com/garment.jpg"}],"options":{"pattern-application":true,"pattern":true}}'

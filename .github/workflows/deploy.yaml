@@ -131,11 +131,10 @@ jobs:
                       "url": "https://cdn.shopify.com/s/files/1/0081/8711/7664/files/Dayflex_leggingpantnofrontseam_shadowblack_10189.jpg?v=1744812821",
                   }
               ],
-              "pools": {
-                  "pattern-application": ["Placement print", "All-over print"],
-                  "pattern": ["Floral", "Striped"],
+              "options": {
+                  "pattern-application": true,
+                  "pattern": true,
               },
-              "top_k": 3,
           }
           json.dump(
               {
