@@ -13,76 +13,74 @@ def test_parse_request_valid() -> None:
         "body": json.dumps(
             {
                 "images": [{"url": "https://example.com/a.jpg"}],
-                "pools": {"pattern": ["Floral", "Stripe"]},
-                "top_k": 2,
+                "options": {"pattern": True, "colour": False},
             }
         )
     }
     parsed = _parse_request(event)
     assert parsed is not None
-    urls, pools, top_k = parsed
+    urls, enabled = parsed
     assert urls == ["https://example.com/a.jpg"]
-    assert pools == {"pattern": ["Floral", "Stripe"]}
-    assert top_k == 2
+    assert enabled == ("pattern",)
 
 
-def test_parse_request_allows_empty_colour_pool() -> None:
+def test_parse_request_allows_all_option_slugs() -> None:
+    options = {
+        slug: True
+        for slug in (
+            "pattern-application",
+            "pattern",
+            "embellishment",
+            "lustre",
+            "appearance",
+            "colour",
+            "subjects",
+            "product-type",
+            "sleeve-length",
+            "neckline",
+            "trouser-length",
+            "skirt-length",
+            "dress-length",
+            "shorts-style",
+        )
+    }
+    event = {"body": json.dumps({"images": [{"url": "https://example.com/a.jpg"}], "options": options})}
+    parsed = _parse_request(event)
+    assert parsed is not None
+    _urls, enabled = parsed
+    assert set(enabled) == set(options)
+
+
+def test_parse_request_accepts_option_aliases() -> None:
     event = {
         "body": json.dumps(
             {
                 "images": [{"url": "https://example.com/a.jpg"}],
-                "pools": {"colour": []},
+                "options": {"color": True, "product_type": True},
             }
         )
     }
     parsed = _parse_request(event)
     assert parsed is not None
-    _urls, pools, _top_k = parsed
-    assert pools == {"colour": []}
+    _urls, enabled = parsed
+    assert set(enabled) == {"colour", "product-type"}
 
 
-def test_parse_request_allows_empty_catalog_pools() -> None:
-    for slug in (
-        "colour",
-        "subjects",
-        "product-type",
-        "sleeve-length",
-        "neckline",
-        "trouser-length",
-        "skirt-length",
-        "dress-length",
-        "shorts-style",
-    ):
-        event = {
-            "body": json.dumps(
-                {
-                    "images": [{"url": "https://example.com/a.jpg"}],
-                    "pools": {slug: []},
-                }
-            )
-        }
-        parsed = _parse_request(event)
-        assert parsed is not None
-        _urls, pools, _top_k = parsed
-        assert pools == {slug: []}
+def test_parse_request_rejects_missing_options() -> None:
+    assert _parse_request({"body": json.dumps({"images": [{"url": "https://example.com/a.jpg"}]})}) is None
 
 
-def test_parse_request_ignores_legacy_graphic_theme_pool() -> None:
-    event = {
-        "body": json.dumps(
-            {
-                "images": [{"url": "https://example.com/a.jpg"}],
-                "pools": {"graphic-theme": ["Lion"], "pattern": ["Floral"]},
-            }
-        )
-    }
-    parsed = _parse_request(event)
-    assert parsed is not None
-    _urls, pools, _top_k = parsed
-    assert pools == {"pattern": ["Floral"]}
+def test_parse_request_rejects_all_false_options() -> None:
     assert (
         _parse_request(
-            {"body": json.dumps({"images": [{"url": "https://example.com/a.jpg"}], "pools": {"graphic-theme": []}})}
+            {
+                "body": json.dumps(
+                    {
+                        "images": [{"url": "https://example.com/a.jpg"}],
+                        "options": {"pattern": False},
+                    }
+                )
+            }
         )
         is None
     )
@@ -90,7 +88,13 @@ def test_parse_request_ignores_legacy_graphic_theme_pool() -> None:
 
 def test_parse_request_rejects_invalid_body() -> None:
     assert _parse_request({"body": "not-json"}) is None
-    assert _parse_request({"body": json.dumps({"images": [], "pools": {"x": ["y"]}})}) is None
+    assert _parse_request({"body": json.dumps({"images": [], "options": {"pattern": True}})}) is None
+    assert (
+        _parse_request(
+            {"body": json.dumps({"images": [{"url": "https://example.com/a.jpg"}], "options": {"pattern": "yes"}})}
+        )
+        is None
+    )
 
 
 def test_parse_batch_request_valid() -> None:
@@ -102,22 +106,17 @@ def test_parse_batch_request_valid() -> None:
                         {"key": "product-1", "images": [{"url": "https://example.com/a.jpg"}]},
                         {"key": "product-2", "images": [{"url": "https://example.com/b.jpg"}]},
                     ],
-                    "pools": {"pattern": ["Floral", "Stripe"]},
-                    "top_k": 2,
+                    "options": {"pattern": True, "colour": True},
                 }
             )
         }
     )
 
     assert parsed is not None
-    jobs, pools, top_k = parsed
+    jobs, enabled, unknown = parsed
     assert [job.key for job in jobs] == ["product-1", "product-2"]
-    assert [job.image_urls for job in jobs] == [
-        ["https://example.com/a.jpg"],
-        ["https://example.com/b.jpg"],
-    ]
-    assert pools == {"pattern": ["Floral", "Stripe"]}
-    assert top_k == 2
+    assert set(enabled) == {"pattern", "colour"}
+    assert unknown == []
 
 
 def test_parse_batch_request_rejects_duplicate_keys() -> None:
@@ -130,7 +129,7 @@ def test_parse_batch_request_rejects_duplicate_keys() -> None:
                             {"key": "duplicate", "images": [{"url": "https://example.com/a.jpg"}]},
                             {"key": "duplicate", "images": [{"url": "https://example.com/b.jpg"}]},
                         ],
-                        "pools": {"pattern": ["Floral"]},
+                        "options": {"pattern": True},
                     }
                 )
             }
@@ -144,13 +143,13 @@ def test_lambda_handler_invalid_request() -> None:
     assert response["statusCode"] == 400
 
 
-def test_lambda_handler_unknown_taxonomy() -> None:
+def test_lambda_handler_unknown_option() -> None:
     response = lambda_handler(
         {
             "body": json.dumps(
                 {
                     "images": [{"url": "https://example.com/a.jpg"}],
-                    "pools": {"texture": ["Smooth"]},
+                    "options": {"texture": True},
                 }
             )
         },
@@ -158,68 +157,16 @@ def test_lambda_handler_unknown_taxonomy() -> None:
     )
     assert response["statusCode"] == 400
     body = json.loads(response["body"])
-    assert body["error"] == "unknown_taxonomy"
+    assert body["error"] == "unknown_option"
     assert "texture" in body["detail"]
     assert "pattern" in body["accepted"]
-    assert "graphic-theme" not in body["accepted"]
-
-
-def _fake_batched_scores(
-    *,
-    image_urls: list[str],
-    pools: dict[str, list[str]],
-    top_k: int,
-) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
-    del image_urls, top_k
-    return (
-        {0: {slug: [{"value": labels[0] if labels else slug, "score": 0.9}] for slug, labels in pools.items()}},
-        {},
-    )
 
 
 def test_lambda_handler_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.handler.score_pools_for_images", _fake_batched_scores)
-
-    response = lambda_handler(
-        {
-            "body": json.dumps(
-                {
-                    "images": [{"url": "https://example.com/a.jpg"}],
-                    "pools": {
-                        "pattern": ["Floral"],
-                        "pattern-application": ["Placement print"],
-                        "colour": [],
-                        "subjects": [],
-                        "product-type": [],
-                    },
-                }
-            )
-        },
-        None,
-    )
-    assert response["statusCode"] == 200
-    body = json.loads(response["body"])
-    scores = body["results"][0]["scores"]
-    assert scores["pattern"][0]["value"] == "Floral"
-    assert "graphic-theme" not in scores
-    assert scores["colour"][0]["value"] == "colour"
-    assert scores["product-type"][0]["value"] == "product-type"
-    assert scores["subjects"][0]["value"] == "subjects"
-
-
-def test_lambda_handler_accepts_taxonomy_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, list[str]] = {}
-
-    def _fake_score(
-        *,
-        image_urls: list[str],
-        pools: dict[str, list[str]],
-        top_k: int,
-    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
-        del image_urls, top_k
-        seen.update(pools)
+    def _fake_score(*, image_urls: list[str], enabled_slugs: tuple[str, ...]) -> tuple[dict, dict]:
+        del image_urls
         return (
-            {0: {slug: [{"value": labels[0] if labels else slug, "score": 0.8}] for slug, labels in pools.items()}},
+            {0: {slug: [{"value": slug, "score": 0.9}] for slug in enabled_slugs}},
             {},
         )
 
@@ -230,14 +177,25 @@ def test_lambda_handler_accepts_taxonomy_aliases(monkeypatch: pytest.MonkeyPatch
             "body": json.dumps(
                 {
                     "images": [{"url": "https://example.com/a.jpg"}],
-                    "pools": {"color": ["Navy"], "product_type": ["Dress"], "graphic_theme": ["Skull"]},
+                    "options": {
+                        "pattern": True,
+                        "pattern-application": True,
+                        "colour": True,
+                        "subjects": True,
+                        "product-type": True,
+                    },
                 }
             )
         },
         None,
     )
     assert response["statusCode"] == 200
-    assert set(seen) == {"color", "product_type"}
+    body = json.loads(response["body"])
+    scores = body["results"][0]["scores"]
+    assert scores["pattern"][0]["value"] == "pattern"
+    assert scores["colour"][0]["value"] == "colour"
+    assert scores["product-type"][0]["value"] == "product-type"
+    assert scores["subjects"][0]["value"] == "subjects"
 
 
 def test_lambda_handler_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,15 +216,9 @@ def test_lambda_handler_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_lambda_handler_batch_success_and_image_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fake_score(
-        *,
-        image_urls: list[str],
-        pools: dict[str, list[str]],
-        top_k: int,
-    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
+    def _fake_score(*, image_urls: list[str], enabled_slugs: tuple[str, ...]) -> tuple[dict, dict]:
         assert image_urls == ["https://example.com/a.jpg", "https://example.com/b.jpg"]
-        assert pools == {"pattern": ["Floral"]}
-        assert top_k == 3
+        assert enabled_slugs == ("pattern",)
         return (
             {0: {"pattern": [{"value": "Floral", "score": 0.9}]}},
             {1: ImageUnavailableError("http_404")},
@@ -288,7 +240,7 @@ def test_lambda_handler_batch_success_and_image_failure(monkeypatch: pytest.Monk
                             ],
                         }
                     ],
-                    "pools": {"pattern": ["Floral"]},
+                    "options": {"pattern": True},
                 }
             ),
         },
@@ -305,12 +257,7 @@ def test_lambda_handler_batch_success_and_image_failure(monkeypatch: pytest.Monk
 def test_lambda_handler_score_batches_images_in_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
-    def _fake_score(
-        *,
-        image_urls: list[str],
-        pools: dict[str, list[str]],
-        top_k: int,
-    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
+    def _fake_score(*, image_urls: list[str], enabled_slugs: tuple[str, ...]) -> tuple[dict, dict]:
         calls.append(image_urls)
         return (
             {
@@ -330,7 +277,7 @@ def test_lambda_handler_score_batches_images_in_one_call(monkeypatch: pytest.Mon
                         {"url": "https://example.com/a.jpg"},
                         {"url": "https://example.com/b.jpg"},
                     ],
-                    "pools": {"pattern": ["Floral", "Stripe"]},
+                    "options": {"pattern": True},
                 }
             )
         },
@@ -344,12 +291,7 @@ def test_lambda_handler_score_batches_images_in_one_call(monkeypatch: pytest.Mon
 
 
 def test_lambda_handler_all_images_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fail(
-        *,
-        image_urls: list[str],
-        pools: dict[str, list[str]],
-        top_k: int,
-    ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
+    def _fail(*, image_urls: list[str], enabled_slugs: tuple[str, ...]) -> tuple[dict, dict]:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("src.handler.score_pools_for_images", _fail)
@@ -359,7 +301,7 @@ def test_lambda_handler_all_images_failed(monkeypatch: pytest.MonkeyPatch) -> No
             "body": json.dumps(
                 {
                     "images": [{"url": "https://example.com/a.jpg"}],
-                    "pools": {"pattern": ["Floral"]},
+                    "options": {"pattern": True},
                 }
             )
         },

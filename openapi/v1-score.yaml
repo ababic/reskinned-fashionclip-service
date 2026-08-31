@@ -3,13 +3,14 @@ info:
   title: Reskinned FashionCLIP Scorer
   version: "1"
   description: |
-    POST product image URLs with attribute label pools; receive ranked FashionCLIP scores.
+    POST product image URLs with boolean classifier flags; receive ranked FashionCLIP
+    scores from service-owned vocabularies.
 
-    **Human-readable guide:** [`docs/api.md`](../docs/api.md) — pools, optional
+    **Human-readable guide:** [`docs/api.md`](../docs/api.md) — `options`, optional
     catalog/style classifiers, and `score` / `gap` / `p`.
 
     Thresholding and promotion policy live in reskinned-inventory (`PRINT_VISION_*`).
-    Pool slugs are a closed taxonomy; each slug uses an aspect-specific CLIP caption.
+    Classifier slugs are a closed taxonomy; each slug uses an aspect-specific CLIP caption.
   x-readme: docs/api.md
 servers:
   - url: https://{apiId}.execute-api.eu-west-1.amazonaws.com/prod
@@ -19,11 +20,11 @@ servers:
 paths:
   /v1/score:
     post:
-      summary: Score images against label pools or warm the model
+      summary: Score images against enabled classifiers or warm the model
       description: |
-        Score 1–2 garment images. Only slugs present in `pools` are scored.
-        Optional catalog/style pools use service-owned vocabularies. See
-        `docs/api.md`. Send `{"warmup": true}` to load the model without scoring.
+        Score 1–2 garment images. Only classifiers set to `true` in `options` are
+        scored. Each uses a service-owned vocabulary. See `docs/api.md`. Send
+        `{"warmup": true}` to load the model without scoring.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -40,30 +41,27 @@ paths:
                 value:
                   images:
                     - url: https://cdn.example.com/garment.jpg
-                  pools:
-                    pattern-application: [Placement print, All-over print]
-                    pattern: [Floral, Striped, Plain]
-                  top_k: 3
+                  options:
+                    pattern-application: true
+                    pattern: true
               with_colour:
                 summary: Print + colour probe
                 value:
                   images:
                     - url: https://cdn.example.com/legging.jpg
-                  pools:
-                    pattern: [Floral, Striped, Plain]
-                    colour: []
-                  top_k: 2
+                  options:
+                    pattern: true
+                    colour: true
               full_optional:
-                summary: Print + optional catalog pools
+                summary: Print + optional catalog classifiers
                 value:
                   images:
                     - url: https://cdn.example.com/legging.jpg
-                  pools:
-                    pattern: [Floral, Striped, Plain]
-                    colour: []
-                    subjects: []
-                    product-type: []
-                  top_k: 3
+                  options:
+                    pattern: true
+                    colour: true
+                    subjects: true
+                    product-type: true
       responses:
         "200":
           description: At least one image scored successfully
@@ -109,24 +107,27 @@ paths:
                               article: ""
                     errors: []
         "400":
-          description: Invalid request body or unknown pool taxonomy
+          description: Invalid request body or unknown option key
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/InvalidRequestError"
-                  - $ref: "#/components/schemas/UnknownTaxonomyError"
+                  - $ref: "#/components/schemas/UnknownOptionError"
               examples:
                 invalid_request:
                   value:
                     error: invalid_request
-                unknown_taxonomy:
+                unknown_option:
                   value:
-                    error: unknown_taxonomy
-                    detail: "unsupported pool slugs: texture"
+                    error: unknown_option
+                    detail: "unsupported option keys: texture"
                     accepted:
                       - pattern-application
                       - pattern
+                      - embellishment
+                      - lustre
+                      - appearance
                       - colour
                       - subjects
                       - product-type
@@ -154,11 +155,11 @@ paths:
                         detail: http_404
   /v1/score-batch:
     post:
-      summary: Score a bounded batch of product images against shared label pools
+      summary: Score a bounded batch of product images against shared options
       description: |
         Score up to 16 product items in one request. Each item has a caller
-        `key` and 1–2 image URLs. `pools` are shared and follow the same
-        taxonomy rules as `/v1/score`.
+        `key` and 1–2 image URLs. `options` are shared and follow the same
+        rules as `/v1/score`.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -175,13 +176,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/BatchScoreResponse"
         "400":
-          description: Invalid request body or unknown pool taxonomy
+          description: Invalid request body or unknown option key
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/InvalidRequestError"
-                  - $ref: "#/components/schemas/UnknownTaxonomyError"
+                  - $ref: "#/components/schemas/UnknownOptionError"
         "422":
           description: All images failed to score
 components:
@@ -200,7 +201,7 @@ components:
           enum: [true]
     ScoreRequest:
       type: object
-      required: [images, pools]
+      required: [images, options]
       properties:
         images:
           type: array
@@ -214,63 +215,76 @@ components:
                 type: string
                 format: uri
                 description: Public `http` or `https` product image URL.
-        pools:
-          $ref: "#/components/schemas/ScorePools"
-        top_k:
-          type: integer
-          minimum: 1
-          maximum: 5
-          default: 3
-          description: |
-            Max labels per print pool (`pattern`, `pattern-application`).
-            Ignored for catalog/style pools (`colour`, `subjects`, `product-type`,
-            and the style pools). `gap` uses the full pool before print-pool
-            truncation.
-    ScorePools:
+        options:
+          $ref: "#/components/schemas/ScoreOptions"
+    ScoreOptions:
       type: object
       description: |
-        Closed set of taxonomies. Response keys match request slugs.
+        Boolean flags for each classifier slug. Missing keys are treated as
+        `false`. At least one `true` is required.
 
         See `docs/api.md` for full behaviour.
 
-        **Print (inventory today):** `pattern-application`, `pattern`.
+        **Print (inventory today):** `appearance` (combined pattern-application,
+        pattern, embellishment, and lustre) or those facets individually.
 
-        **Colour:** `colour` / `color` — model opinion; empty `[]` is valid.
-        Returns solids, hue-anchored mixes, and one 3-colour combination.
-        `top_k` ignored.
+        **Embellishment:** `embellishment` — warehouse embellishment techniques.
 
-        **Subjects:** `subjects` — graphic-theme catalog; empty `[]` only.
-        `top_k` ignored.
+        **Lustre:** `lustre` — optical fabric lustre or light effect (glitter,
+        matte, iridescent, etc.).
 
-        **Product type:** `product-type` / `product_type` — 141 garment
-        types (plural-normalised warehouse leaves; homewares omitted);
-        empty `[]` or optional extra labels. `top_k` ignored.
+        **Colour:** `colour` / `color` — model opinion. Returns solids,
+        hue-anchored mixes, and one 3-colour combination.
+
+        **Subjects:** `subjects` — graphic-theme catalog.
+
+        **Product type:** `product-type` / `product_type` — 141 garment types.
 
         **Style:** `sleeve-length`, `neckline`, `trouser-length`,
-        `skirt-length`, `dress-length`, and `shorts-style` are optional
-        service-owned pools; empty `[]` is valid and `top_k` is ignored.
-
-        **Legacy:** `graphic-theme` / `graphic_theme` is **ignored**.
-        Use `subjects: []` instead.
-      additionalProperties:
-        type: array
-        items:
-          type: string
+        `skirt-length`, `dress-length`, and `shorts-style`.
+      properties:
+        pattern-application:
+          type: boolean
+        pattern:
+          type: boolean
+        embellishment:
+          type: boolean
+        lustre:
+          type: boolean
+        appearance:
+          type: boolean
+        colour:
+          type: boolean
+        color:
+          type: boolean
+        subjects:
+          type: boolean
+        product-type:
+          type: boolean
+        product_type:
+          type: boolean
+        sleeve-length:
+          type: boolean
+        neckline:
+          type: boolean
+        trouser-length:
+          type: boolean
+        skirt-length:
+          type: boolean
+        dress-length:
+          type: boolean
+        shorts-style:
+          type: boolean
+      additionalProperties: false
       example:
-        pattern-application: [Placement print, All-over print]
-        pattern: [Floral, Striped, Plain]
-        colour: []
-        subjects: []
-        product-type: []
-        sleeve-length: []
-        neckline: []
-        trouser-length: []
-        skirt-length: []
-        dress-length: []
-        shorts-style: []
+        pattern-application: true
+        pattern: true
+        colour: true
+        subjects: true
+        product-type: true
     BatchScoreRequest:
       type: object
-      required: [items, pools]
+      required: [items, options]
       properties:
         items:
           type: array
@@ -278,13 +292,8 @@ components:
           maxItems: 16
           items:
             $ref: "#/components/schemas/BatchScoreItem"
-        pools:
-          $ref: "#/components/schemas/ScorePools"
-        top_k:
-          type: integer
-          minimum: 1
-          maximum: 5
-          default: 3
+        options:
+          $ref: "#/components/schemas/ScoreOptions"
     BatchScoreItem:
       type: object
       required: [key, images]
@@ -336,16 +345,16 @@ components:
           type: number
           minimum: 0
           description: |
-            Mapped-cosine drop to the next label in the full pool (before `top_k`).
-            Zero on the last full-pool label.
+            Mapped-cosine drop to the next label in the full ranked list.
+            Zero on the last label.
         p:
           type: number
           minimum: 0
           maximum: 1
           description: |
-            Within-pool softmax. Present on exclusive pools (`pattern`,
-            `pattern-application`, `product-type`, and style pools). Absent on
-            `colour` and `subjects`.
+            Within-pool softmax. Present on exclusive pools (`appearance`,
+            `pattern`, `pattern-application`, `embellishment`, `lustre`,
+            `product-type`, and style pools). Absent on `colour` and `subjects`.
         kind:
           type: string
           description: Colour rows only.
@@ -374,7 +383,7 @@ components:
           type: string
         scores:
           type: object
-          description: Keys match requested pool slugs only.
+          description: Keys match enabled option slugs only.
           additionalProperties:
             type: array
             items:
@@ -413,13 +422,13 @@ components:
         error:
           type: string
           enum: [invalid_request]
-    UnknownTaxonomyError:
+    UnknownOptionError:
       type: object
       required: [error, detail, accepted]
       properties:
         error:
           type: string
-          enum: [unknown_taxonomy]
+          enum: [unknown_option]
         detail:
           type: string
         accepted:

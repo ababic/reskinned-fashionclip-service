@@ -11,19 +11,11 @@ import sentry_sdk
 from sentry_sdk.integrations.aws_lambda import AwsLambdaIntegration
 
 from src.scoring import ImageUnavailableError, _load_clip_components, score_pools_for_images
-from src.taxonomies import (
-    ACCEPTED_SLUGS,
-    IGNORED_POOL_SLUGS,
-    resolve_taxonomy,
-    returns_full_pool,
-    unsupported_pool_slugs,
-)
+from src.taxonomies import ACCEPTED_SLUGS, resolve_taxonomy, unknown_option_keys
 
 _MAX_IMAGES = 2
 _MAX_BATCH_ITEMS = 16
 _MIN_IMAGES = 1
-_DEFAULT_TOP_K = 3
-_MAX_TOP_K = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,69 +75,65 @@ def _parse_images(raw_images: object, *, max_images: int = _MAX_IMAGES) -> list[
     return parsed
 
 
-def _parse_pools(raw_pools: object) -> dict[str, list[str]] | None:
-    if not isinstance(raw_pools, dict) or not raw_pools:
+def _parse_options(raw_options: object) -> tuple[tuple[str, ...], list[str]] | None:
+    """Return enabled canonical slugs and unknown option keys, or None if malformed."""
+    if not isinstance(raw_options, dict):
         return None
-    parsed_pools: dict[str, list[str]] = {}
-    for slug, labels in raw_pools.items():
-        if not isinstance(slug, str) or not isinstance(labels, list):
+
+    unknown = unknown_option_keys(raw_options)
+    enabled: list[str] = []
+    for key, value in raw_options.items():
+        if not isinstance(value, bool):
             return None
-        if slug.casefold() in IGNORED_POOL_SLUGS:
+        if not value:
             continue
-        clean_labels = [label.strip() for label in labels if isinstance(label, str) and label.strip()]
-        if clean_labels:
-            parsed_pools[slug] = clean_labels
-        elif resolve_taxonomy(slug) is not None and returns_full_pool(slug):
-            parsed_pools[slug] = []
-    if not parsed_pools:
+        canonical = resolve_taxonomy(key)
+        if canonical is None:
+            continue
+        if canonical not in enabled:
+            enabled.append(canonical)
+    if not enabled:
         return None
-    return parsed_pools
+    return tuple(enabled), unknown
 
 
-def _parse_top_k(raw_top_k: object) -> int | None:
-    if not isinstance(raw_top_k, int) or raw_top_k < 1:
-        return None
-    return min(raw_top_k, _MAX_TOP_K)
-
-
-def _unknown_taxonomy_response(pools: dict[str, list[str]]) -> dict[str, object] | None:
-    unknown = unsupported_pool_slugs(list(pools))
-    if not unknown:
-        return None
+def _unknown_option_response(unknown: list[str]) -> dict[str, object]:
     return _response(
         400,
         {
-            "error": "unknown_taxonomy",
-            "detail": f"unsupported pool slugs: {', '.join(unknown)}",
+            "error": "unknown_option",
+            "detail": f"unsupported option keys: {', '.join(unknown)}",
             "accepted": list(ACCEPTED_SLUGS),
         },
     )
 
 
-def _parse_request(event: dict[str, object]) -> tuple[list[str], dict[str, list[str]], int] | None:
+def _parse_request(event: dict[str, object]) -> tuple[list[str], tuple[str, ...]] | None:
     payload = _parse_payload(event)
     if payload is None:
         return None
     images = _parse_images(payload.get("images"))
-    pools = _parse_pools(payload.get("pools"))
-    top_k = _parse_top_k(payload.get("top_k", _DEFAULT_TOP_K))
-    if images is None or pools is None or top_k is None:
+    parsed_options = _parse_options(payload.get("options"))
+    if images is None or parsed_options is None:
         return None
-    return images, pools, top_k
+    enabled_slugs, unknown = parsed_options
+    if unknown:
+        return None
+    return images, enabled_slugs
 
 
-def _parse_batch_request(event: dict[str, object]) -> tuple[list[ScoreJob], dict[str, list[str]], int] | None:
+def _parse_batch_request(event: dict[str, object]) -> tuple[list[ScoreJob], tuple[str, ...], list[str]] | None:
     payload = _parse_payload(event)
     if payload is None:
         return None
     raw_items = payload.get("items")
-    pools = _parse_pools(payload.get("pools"))
-    top_k = _parse_top_k(payload.get("top_k", _DEFAULT_TOP_K))
+    parsed_options = _parse_options(payload.get("options"))
     if not isinstance(raw_items, list) or not (1 <= len(raw_items) <= _MAX_BATCH_ITEMS):
         return None
-    if pools is None or top_k is None:
+    if parsed_options is None:
         return None
 
+    enabled_slugs, unknown = parsed_options
     jobs: list[ScoreJob] = []
     seen_keys: set[str] = set()
     for raw_item in raw_items:
@@ -159,13 +147,12 @@ def _parse_batch_request(event: dict[str, object]) -> tuple[list[ScoreJob], dict
             return None
         seen_keys.add(key)
         jobs.append(ScoreJob(key=key, image_urls=image_urls))
-    return jobs, pools, top_k
+    return jobs, enabled_slugs, unknown
 
 
 def _score_one_request(
     image_urls: list[str],
-    pools: dict[str, list[str]],
-    top_k: int,
+    enabled_slugs: tuple[str, ...],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     results: list[dict[str, object]] = []
     errors: list[dict[str, object]] = []
@@ -173,8 +160,7 @@ def _score_one_request(
     try:
         scores_by_index, image_errors = score_pools_for_images(
             image_urls=image_urls,
-            pools=pools,
-            top_k=top_k,
+            enabled_slugs=enabled_slugs,
         )
     except Exception as exc:  # noqa: BLE001 — one model failure must produce a useful response
         with sentry_sdk.new_scope() as scope:
@@ -211,8 +197,7 @@ def _score_one_request(
 
 def _score_batch_request(
     jobs: list[ScoreJob],
-    pools: dict[str, list[str]],
-    top_k: int,
+    enabled_slugs: tuple[str, ...],
 ) -> tuple[list[dict[str, object]], int]:
     locations = [
         (job_index, image_index, image_url)
@@ -222,8 +207,7 @@ def _score_batch_request(
     try:
         scores_by_index, image_errors = score_pools_for_images(
             image_urls=[location[2] for location in locations],
-            pools=pools,
-            top_k=top_k,
+            enabled_slugs=enabled_slugs,
         )
     except Exception as exc:  # noqa: BLE001 — one model failure must produce a useful batch response
         with sentry_sdk.new_scope() as scope:
@@ -298,23 +282,24 @@ def lambda_handler(event: dict[str, object], context: object) -> dict[str, objec
         parsed_batch = _parse_batch_request(event)
         if parsed_batch is None:
             return _response(400, {"error": "invalid_request"})
-        jobs, pools, top_k = parsed_batch
-        taxonomy_error = _unknown_taxonomy_response(pools)
-        if taxonomy_error is not None:
-            return taxonomy_error
-        items, successful_images = _score_batch_request(jobs, pools, top_k)
+        jobs, enabled_slugs, unknown = parsed_batch
+        if unknown:
+            return _unknown_option_response(unknown)
+        items, successful_images = _score_batch_request(jobs, enabled_slugs)
         if not successful_images:
             return _response(422, {"error": "all_images_failed", "items": items})
         return _response(200, {"items": items})
 
     parsed = _parse_request(event)
     if parsed is None:
+        payload = _parse_payload(event)
+        if payload is not None and isinstance(payload.get("options"), dict):
+            unknown = unknown_option_keys(payload["options"])
+            if unknown:
+                return _unknown_option_response(unknown)
         return _response(400, {"error": "invalid_request"})
-    image_urls, pools, top_k = parsed
-    taxonomy_error = _unknown_taxonomy_response(pools)
-    if taxonomy_error is not None:
-        return taxonomy_error
-    results, errors = _score_one_request(image_urls, pools, top_k)
+    image_urls, enabled_slugs = parsed
+    results, errors = _score_one_request(image_urls, enabled_slugs)
 
     if not results:
         return _response(422, {"error": "all_images_failed", "results": [], "errors": errors})

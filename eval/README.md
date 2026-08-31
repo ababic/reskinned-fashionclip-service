@@ -21,9 +21,10 @@ One JSON object per line:
 {
   "id": "shadow-black-leggings",
   "image_url": "https://example.com/garment.jpg",
-  "pools": {
-    "pattern": ["Floral", "Striped", "Plain"],
-    "product-type": []
+  "options": {
+    "pattern": true,
+    "product-type": true,
+    "subjects": true
   },
   "expect": {
     "pattern": {"winner": "Plain"},
@@ -33,7 +34,7 @@ One JSON object per line:
 }
 ```
 
-Include `"subjects": []` in `pools` when judging graphic-theme hits.
+Set `"subjects": true` in `options` when judging graphic-theme hits.
 
 `expect` is optional and partial. Add 30–80 labeled SKUs here when you have
 them; keep this file out of the Lambda image.

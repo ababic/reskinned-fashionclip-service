@@ -1,6 +1,6 @@
 # Reskinned FashionCLIP Service
 
-AWS Lambda HTTP scorer for Reskinned **print / pattern classification**. Inventory posts product image URLs + label pools; this service returns ranked FashionCLIP scores only. Each pool slug is a closed taxonomy with an aspect-specific CLIP caption.
+AWS Lambda HTTP scorer for Reskinned **print / pattern classification**. Inventory posts product image URLs and boolean classifier flags; this service returns ranked FashionCLIP scores from service-owned vocabularies.
 
 Sibling consumer: [`wearecrew/reskinned-inventory`](https://github.com/wearecrew/reskinned-inventory) (`PRINT_VISION_URL` / `PRINT_VISION_API_KEY`).
 
@@ -33,7 +33,7 @@ just eval   # optional; loads FashionCLIP, not part of CI
 
 ## API
 
-Full guide: **[`docs/api.md`](docs/api.md)** — pools, optional catalog/style classifiers, `score` / `gap` / `p`, errors, and examples.
+Full guide: **[`docs/api.md`](docs/api.md)** — boolean `options`, optional catalog/style classifiers, `score` / `gap` / `p`, errors, and examples.
 
 OpenAPI contract: [`openapi/v1-score.yaml`](openapi/v1-score.yaml).
 
@@ -47,11 +47,10 @@ curl -sS -X POST "$PRINT_VISION_URL" \
   -H "x-api-key: $PRINT_VISION_API_KEY" \
   -d '{
     "images": [{"url": "https://example.com/garment.jpg"}],
-    "pools": {
-      "pattern-application": ["Placement print", "All-over print"],
-      "pattern": ["Floral", "Striped", "Plain"]
-    },
-    "top_k": 3
+    "options": {
+      "pattern-application": true,
+      "pattern": true
+    }
   }'
 ```
 
@@ -60,7 +59,7 @@ To warm the model without downloading or scoring an image, send a single request
 the model has loaded.
 
 For throughput-sensitive callers, `/v1/score-batch` accepts up to 16 product items
-per request. Each item has a caller-supplied `key` and one or two image URLs; `pools`
+per request. Each item has a caller-supplied `key` and one or two image URLs; `options`
 are shared by the whole request:
 
 ```bash
@@ -72,20 +71,22 @@ curl -sS -X POST "$PRINT_VISION_BATCH_URL" \
       {"key": "product-1", "images": [{"url": "https://example.com/a.jpg"}]},
       {"key": "product-2", "images": [{"url": "https://example.com/b.jpg"}]}
     ],
-    "pools": {"pattern": ["Floral", "Stripe"]},
-    "top_k": 3
+    "options": {"pattern": true, "colour": true}
   }'
 ```
 
 | Slug | Role |
 |------|------|
 | `pattern-application`, `pattern` | Print facets (inventory today) |
-| `colour` (`color`) | Model colour opinion — opt-in; see docs |
-| `subjects` | Graphic-theme catalog — opt-in (`"subjects": []`); do not send `graphic-theme` |
-| `product-type` (`product_type`) | Garment category — opt-in; 141 types + optional extras |
+| `appearance` | Combined pattern-application + pattern + embellishment + lustre |
+| `embellishment` | Warehouse embellishment techniques |
+| `lustre` | Optical fabric lustre / light effect |
+| `colour` (`color`) | Model colour opinion — opt-in |
+| `subjects` | Graphic-theme catalog — opt-in |
+| `product-type` (`product_type`) | Garment category — opt-in; 141 types |
 | `sleeve-length`, `neckline` | Garment style — opt-in; fixed vocabularies |
 | `trouser-length`, `skirt-length`, `dress-length` | Garment length — opt-in; fixed vocabularies |
-| `shorts-style` | Shorts silhouette/use — opt-in; cargo, running, denim, cycling, etc. |
+| `shorts-style` | Shorts silhouette/use — opt-in |
 
 Behaviour notes:
 
@@ -127,6 +128,6 @@ Production was failing with `Could not import module 'CLIPModel'` / `RpcBackendO
 
 | This service | Inventory |
 |--------------|-----------|
-| FashionCLIP scores for label pools | Orchestrator / Celery / product flags |
+| FashionCLIP scores for enabled classifiers | Orchestrator / Celery / product flags |
 | API key auth at API Gateway | `PRINT_VISION_*` settings + client |
 | Sentry on Lambda | Sentry on Heroku warehouse apps |

@@ -1,16 +1,7 @@
 """Accepted score-pool taxonomies and aspect-specific FashionCLIP captions.
 
-Print facets `pattern-application` and `pattern` use tailored captions so CLIP
-is asked about one aspect at a time. Optional pools — ``subjects`` (graphic-theme),
-``colour``, and ``product-type`` — run only when present in the request; each uses
-a service-owned vocabulary (empty ``[]`` is enough).
-
-FashionCLIP already encodes colour from Farfetch-style captions. The `colour`
-pool probes that space: a service-owned fashion colour vocabulary (plus any
-extra names the caller adds), each as a solid and as a hue-anchored mix.
-The top 3 solids are then scored as one named 3-colour combination. Mix captions use
-Farfetch-like wording (``a multicolour garment with grey hues``). Interpretation
-stays with the caller.
+Every classifier is opt-in via boolean flags in the request ``options`` map.
+Each enabled pool uses a service-owned vocabulary and tailored CLIP captions.
 """
 
 from __future__ import annotations
@@ -56,8 +47,6 @@ class GarmentType:
 _COLOUR_COMBINATION_SIZE = 3
 _COLOUR_NON_FEATURED = frozenset({"multi", "multicolour", "multicolor"})
 
-# Colour words FashionCLIP saw on Farfetch-style product text — the model's
-# own colour language, not an inventory taxonomy.
 MODEL_COLOURS: tuple[str, ...] = (
     "Black",
     "White",
@@ -83,6 +72,95 @@ MODEL_COLOURS: tuple[str, ...] = (
     "Gold",
     "Silver",
     "Multi",
+)
+
+# Warehouse prod Attribute.choices (global, no brand/garment-type overrides).
+MODEL_PATTERNS: tuple[str, ...] = (
+    "Abstract",
+    "Animal print",
+    "Ankara",
+    "Argyle",
+    "Camo",
+    "Checked",
+    "Cheetah print",
+    "Chevron",
+    "Colour block",
+    "Cow print",
+    "Crocodile print",
+    "Dalmatian print",
+    "Damask",
+    "Fair Isle",
+    "Flames",
+    "Floral",
+    "Geometric",
+    "Gingham",
+    "Giraffe print",
+    "Heart print",
+    "Herringbone",
+    "Houndstooth",
+    "Ikat",
+    "Kilim",
+    "Leaf print",
+    "Leopard print",
+    "Lynx print",
+    "Madras",
+    "Mosaic print",
+    "Ocelot print",
+    "Ombre",
+    "Paisley",
+    "Pinstripe",
+    "Plaid",
+    "Polka dot",
+    "Puppytooth",
+    "Shibori",
+    "Slogan",
+    "Snake print",
+    "Spotted",
+    "Spotty",
+    "Striped",
+    "Stripey",
+    "Suzani",
+    "Tartan",
+    "Tiger print",
+    "Toile",
+    "Zebra print",
+    "Zigzag",
+)
+
+MODEL_PATTERN_APPLICATIONS: tuple[str, ...] = (
+    "All-over print",
+    "Batik",
+    "Block print",
+    "Border print",
+    "Edge print",
+    "Jacquard",
+    "Knit pattern",
+    "Lace",
+    "Placement print",
+    "Space dye",
+    "Tie dye",
+    "Wax print",
+)
+
+MODEL_LUSTRES: tuple[str, ...] = (
+    "Glitter",
+    "Glossy",
+    "Holographic",
+    "Iridescent",
+    "Matte",
+    "Pearlescent",
+    "Shimmer",
+    "Sparkly",
+)
+
+MODEL_EMBELLISHMENTS: tuple[str, ...] = (
+    "Appliquéd",
+    "Beaded",
+    "Diamante",
+    "Embroidered",
+    "Fringe",
+    "Lace trim",
+    "Sequin",
 )
 
 # Service-owned style probes. These are deliberately separate from
@@ -434,85 +512,162 @@ def _captions(entries: dict[str, str]) -> dict[str, str]:
     return {_normalise_label(key): text for key, text in entries.items()}
 
 
-# Print facets inventory already uses. Captions name the aspect so CLIP is not
-# asked to match the same global "a garment with {label}" string for all three.
 TAXONOMIES: dict[str, Taxonomy] = {
     "pattern-application": Taxonomy(
         slug="pattern-application",
         aliases=("pattern_application",),
         fallback="a garment whose print or decoration is applied as {label}",
         exclusive=True,
-        suggested=("Placement print", "All-over print", "Border print", "Embroidery"),
+        return_all=True,
         captions=_captions(
             {
-                "placement print": ("a garment with a placement print, decoration confined to one area of the garment"),
-                "placement": ("a garment with a placement print, decoration confined to one area of the garment"),
                 "all-over print": "a garment covered entirely in an all-over repeating print",
+                "aop": "a garment covered entirely in an all-over repeating print",
                 "all over print": "a garment covered entirely in an all-over repeating print",
                 "allover print": "a garment covered entirely in an all-over repeating print",
-                "all-over": "a garment covered entirely in an all-over repeating print",
+                "batik": "a garment with a batik wax-resist dye pattern in the fabric",
+                "block print": "a garment with a woodblock printed pattern",
                 "border print": "a garment with a border print along an edge or hem",
-                "embroidery": "a garment with embroidered decoration applied to the fabric",
-                "placement embroidery": ("a garment with embroidered decoration confined to one area of the garment"),
-                "appliqué": "a garment with appliqué decoration applied onto the fabric",
-                "applique": "a garment with appliqué decoration applied onto the fabric",
-                "colour-block": "a garment with colour-block panels of solid colour",
-                "color-block": "a garment with colour-block panels of solid colour",
-                "colour block": "a garment with colour-block panels of solid colour",
-                "screen print": "a garment with a screen-printed decoration applied to the fabric",
+                "edge print": "a garment with a print along a garment edge",
+                "jacquard": "a garment with a jacquard pattern woven into the fabric, not a printed design",
+                "knit pattern": "a garment with a pattern knitted into the fabric, not a printed design",
+                "lace": "a garment made of lace fabric, not lace trim sewn on",
+                "placement print": "a garment with a placement print, decoration confined to one area of the garment",
+                "printed": "a garment with a placement print, decoration confined to one area of the garment",
+                "placement": "a garment with a placement print, decoration confined to one area of the garment",
+                "space dye": "a garment with space-dyed yarn and mottled colour, not a printed motif",
+                "tie dye": "a garment dyed with a tie-dye resist technique",
+                "wax print": "a garment with an African wax-print technique",
             }
         ),
     ),
     "pattern": Taxonomy(
         slug="pattern",
-        fallback="a garment whose pattern is {label}",
+        fallback="a garment with a repeating {label} pattern on the fabric surface",
         exclusive=True,
-        suggested=(
-            "Floral",
-            "Striped",
-            "Plain",
-            "Check",
-            "Polka dot",
-            "Animal",
-            "Geometric",
-            "Abstract",
-            "Paisley",
-            "Tie-dye",
-            "Camouflage",
-        ),
+        return_all=True,
         captions=_captions(
             {
+                "abstract": "a garment with an abstract pattern",
+                "animal print": "a garment with a generic animal print, not a pictorial animal motif",
+                "animal": "a garment with a generic animal print, not a pictorial animal motif",
+                "ankara": "a garment with an ankara print pattern",
+                "argyle": "a garment with an argyle diamond pattern",
+                "camo": "a garment with a camouflage pattern",
+                "camouflage": "a garment with a camouflage pattern",
+                "checked": "a garment with a checked pattern",
+                "check": "a garment with a checked pattern",
+                "checkered": "a garment with a checked pattern",
+                "cheetah print": "a garment with a cheetah print, not leopard or ocelot print",
+                "chevron": "a garment with a chevron zigzag pattern",
+                "colour block": "a garment with colour-block panels of solid colour",
+                "color block": "a garment with colour-block panels of solid colour",
+                "colour-block": "a garment with colour-block panels of solid colour",
+                "cow print": "a garment with a cow-hide print, not a pictorial cow motif",
+                "crocodile print": "a garment with a crocodile-skin print, not a pictorial reptile motif",
+                "dalmatian print": "a garment with a dalmatian spot print, not a pictorial dog motif",
+                "damask": "a garment with a damask woven floral pattern",
+                "fair isle": "a garment with a fair isle knitted colourwork pattern",
+                "flames": "a garment with a repeating flames print pattern, not a single fire motif",
+                "flame": "a garment with a repeating flames print pattern, not a single fire motif",
+                "flame print": "a garment with a repeating flames print pattern, not a single fire motif",
                 "floral": "a garment with a floral pattern",
                 "floral print": "a garment with a floral pattern",
+                "geometric": "a garment with a geometric pattern",
+                "gingham": "a garment with a gingham check pattern",
+                "giraffe print": "a garment with a giraffe-skin print, not a pictorial giraffe motif",
+                "heart print": "a garment with a repeating heart print pattern, not a single romance motif",
+                "herringbone": "a garment with a herringbone pattern",
+                "houndstooth": "a garment with a houndstooth pattern",
+                "ikat": "a garment with an ikat pattern",
+                "kilim": "a garment with a kilim rug geometric pattern",
+                "leaf print": "a garment with a repeating leaf print pattern, not a botanical graphic motif",
+                "leopard print": "a garment with a leopard print, not cheetah, ocelot or lynx print",
+                "leopard": "a garment with a leopard print, not cheetah, ocelot or lynx print",
+                "lynx print": "a garment with a lynx print, not leopard or cheetah print",
+                "madras": "a garment with a madras check pattern",
+                "mosaic print": "a garment with a mosaic tile print",
+                "ocelot print": "a garment with an ocelot print, not leopard or cheetah print",
+                "ombre": "a garment with an ombre colour gradient",
+                "paisley": "a garment with a paisley pattern",
+                "pinstripe": "a garment with a pinstripe pattern, not a wide stripe",
+                "plaid": "a garment with a plaid pattern",
+                "polka dot": "a garment with a regular polka dot pattern",
+                "polka dots": "a garment with a regular polka dot pattern",
+                "puppytooth": "a garment with a small puppytooth check, not full houndstooth",
+                "shibori": "a garment with a shibori resist-dye pattern",
+                "slogan": "a garment with a slogan or typography print",
+                "snake print": "a garment with a snakeskin print, not a pictorial snake motif",
+                "spotted": "a garment with an irregular spotted pattern, not regular polka dots",
+                "spotty": "a garment with a casual spotty pattern, not regular polka dots",
+                "spot": "a garment with an irregular spotted pattern, not regular polka dots",
                 "striped": "a garment with a striped pattern",
                 "stripe": "a garment with a striped pattern",
                 "stripes": "a garment with a striped pattern",
-                "plain": "a plain solid garment with no print pattern",
-                "solid": "a plain solid garment with no print pattern",
-                "check": "a garment with a check pattern",
-                "checked": "a garment with a check pattern",
-                "checkered": "a garment with a check pattern",
-                "plaid": "a garment with a plaid pattern",
-                "gingham": "a garment with a gingham check pattern",
-                "polka dot": "a garment with a polka dot pattern",
-                "polka dots": "a garment with a polka dot pattern",
-                "spot": "a garment with a spotted pattern",
-                "spotted": "a garment with a spotted pattern",
-                "animal": "a garment with an animal print pattern",
-                "animal print": "a garment with an animal print pattern",
-                "leopard": "a garment with a leopard print pattern",
-                "geometric": "a garment with a geometric pattern",
-                "abstract": "a garment with an abstract pattern",
-                "paisley": "a garment with a paisley pattern",
-                "tie-dye": "a garment with a tie-dye pattern",
-                "tie dye": "a garment with a tie-dye pattern",
-                "camouflage": "a garment with a camouflage pattern",
-                "camo": "a garment with a camouflage pattern",
-                "herringbone": "a garment with a herringbone pattern",
-                "houndstooth": "a garment with a houndstooth pattern",
-                "graphic": "a garment with a graphic print pattern",
+                "stripey": "a garment with an informal stripey pattern, not a regular pinstripe",
+                "suzani": "a garment with a suzani floral embroidery-style pattern",
+                "tartan": "a garment with a tartan pattern",
+                "tiger print": "a garment with a tiger-stripe print, not a pictorial tiger motif",
+                "toile": "a garment with a toile de jouy scenic print",
+                "zebra print": "a garment with a zebra-stripe print, not a pictorial zebra motif",
+                "zigzag": "a garment with a zigzag pattern, not chevron",
             }
         ),
+    ),
+    "embellishment": Taxonomy(
+        slug="embellishment",
+        fallback="a garment with {label} decoration physically attached to the fabric",
+        exclusive=True,
+        return_all=True,
+        captions=_captions(
+            {
+                "appliquéd": "a garment with fabric appliqué shapes sewn on top of the base material",
+                "appliqued": "a garment with fabric appliqué shapes sewn on top of the base material",
+                "appliqué": "a garment with fabric appliqué shapes sewn on top of the base material",
+                "applique": "a garment with fabric appliqué shapes sewn on top of the base material",
+                "beaded": "a garment with visible beads attached to the fabric surface",
+                "diamante": "a garment with diamante or rhinestone gems fixed to the surface",
+                "embroidered": "a garment with raised stitched embroidery on the fabric, not a printed design",
+                "embroidery": "a garment with raised stitched embroidery on the fabric, not a printed design",
+                "fringe": "a garment with hanging fringe tassels along an edge",
+                "lace trim": "a garment with lace trim edging sewn on, not a garment made wholly of lace",
+                "sequin": "a garment covered with attached sequin discs that catch the light",
+                "sequins": "a garment covered with attached sequin discs that catch the light",
+            }
+        ),
+    ),
+    "lustre": Taxonomy(
+        slug="lustre",
+        fallback="the garment's fabric has a {label} optical finish under the light",
+        exclusive=True,
+        return_all=True,
+        captions=_captions(
+            {
+                "glitter": (
+                    "the garment's fabric has fine glitter particles embedded in the finish, "
+                    "not attached sequins or a glitter print"
+                ),
+                "glossy": "the garment's fabric has a smooth high-gloss reflective shine across the surface",
+                "holographic": "the garment's fabric has a rainbow holographic reflective sheen",
+                "iridescent": (
+                    "the garment's fabric has a colour-shifting iridescent lustre as the light angle changes"
+                ),
+                "matte": "the garment's fabric has a flat matte finish that absorbs light without shine",
+                "pearlescent": "the garment's fabric has a soft pearlescent inner glow, like a pearl surface",
+                "shimmer": (
+                    "the garment's fabric has a subtle woven or coated shimmer, without loose glitter particles"
+                ),
+                "sparkly": (
+                    "the garment's fabric has an overall sparkly light-catching finish throughout the material"
+                ),
+            }
+        ),
+    ),
+    "appearance": Taxonomy(
+        slug="appearance",
+        fallback="a garment with {label} appearance",
+        exclusive=True,
+        return_all=True,
     ),
     "colour": Taxonomy(
         slug="colour",
@@ -549,21 +704,21 @@ for _taxonomy in TAXONOMIES.values():
 
 ACCEPTED_SLUGS: tuple[str, ...] = tuple(TAXONOMIES)
 
+# Warehouse ``appearance`` attribute group: one exclusive pool spanning these facets.
+APPEARANCE_MEMBER_SLUGS: tuple[str, ...] = (
+    "pattern-application",
+    "pattern",
+    "embellishment",
+    "lustre",
+)
+
 
 def resolve_taxonomy(slug: str) -> str | None:
     return _SLUG_TO_CANONICAL.get(slug.strip().casefold())
 
 
-def unsupported_pool_slugs(slugs: list[str]) -> list[str]:
-    return [slug for slug in slugs if resolve_taxonomy(slug) is None]
-
-
 def _product_type_phrase(label: str) -> tuple[str, str]:
-    """Return ``(article, spoken)`` for a product-type label.
-
-    Catalog rows use the stored article / spoken form. Caller extras infer
-    a determiner so ``Kimono`` still becomes ``a photo of a kimono``.
-    """
+    """Return ``(article, spoken)`` for a product-type label."""
     key = _normalise_label(label)
     known = _GARMENT_BY_KEY.get(key)
     if known is not None:
@@ -631,26 +786,10 @@ def _join_english(parts: list[str] | tuple[str, ...]) -> str:
     return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
-def _probe_labels(catalog: tuple[str, ...], extra_labels: list[str]) -> list[str]:
-    seen: set[str] = set()
-    labels: list[str] = []
-    for label in (*catalog, *extra_labels):
-        key = _normalise_label(label)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        labels.append(label)
-    return labels
-
-
-def _colour_probe_labels(extra_labels: list[str]) -> list[str]:
-    return _probe_labels(MODEL_COLOURS, extra_labels)
-
-
-def colour_probe_items(extra_labels: list[str] | None = None) -> list[ScoreItem]:
-    """Solid and mix captions for the model's colour vocabulary (plus caller extras)."""
+def colour_probe_items() -> list[ScoreItem]:
+    """Solid and mix captions for the model's colour vocabulary."""
     items: list[ScoreItem] = []
-    for label in _colour_probe_labels(extra_labels or []):
+    for label in MODEL_COLOURS:
         key = _normalise_label(label)
         if key.endswith(" mix"):
             hue = key.removesuffix(" mix").strip() or key
@@ -702,36 +841,73 @@ def graphic_motif_items() -> list[ScoreItem]:
     return [ScoreItem(value, caption) for value, caption in GRAPHIC_SUBJECTS]
 
 
-def _canonical_garment_label(label: str) -> str:
-    known = _GARMENT_BY_KEY.get(_normalise_label(label))
-    return known.value if known is not None else label
+def pattern_probe_items() -> list[ScoreItem]:
+    """Pattern-structure captions from the fixed vocabulary."""
+    return [ScoreItem(label, caption_for_label("pattern", label)) for label in MODEL_PATTERNS]
 
 
-def product_type_probe_items(extra_labels: list[str] | None = None) -> list[ScoreItem]:
-    """Garment-type captions from the fixed vocabulary (plus optional caller extras)."""
-    extras = [_canonical_garment_label(label) for label in extra_labels or []]
+def pattern_application_probe_items() -> list[ScoreItem]:
+    """Print-application captions from the fixed vocabulary."""
+    return [ScoreItem(label, caption_for_label("pattern-application", label)) for label in MODEL_PATTERN_APPLICATIONS]
+
+
+def embellishment_probe_items() -> list[ScoreItem]:
+    """Embellishment captions from the fixed vocabulary."""
+    return [ScoreItem(label, caption_for_label("embellishment", label)) for label in MODEL_EMBELLISHMENTS]
+
+
+def lustre_probe_items() -> list[ScoreItem]:
+    """Lustre captions from the fixed vocabulary."""
+    return [ScoreItem(label, caption_for_label("lustre", label)) for label in MODEL_LUSTRES]
+
+
+def appearance_probe_items() -> list[ScoreItem]:
+    """Combined appearance captions across the warehouse Appearance attribute group."""
     items: list[ScoreItem] = []
-    for label in _probe_labels(MODEL_GARMENT_TYPES, extras):
+    for slug in APPEARANCE_MEMBER_SLUGS:
+        items.extend(prompts_for_pool(slug))
+    return items
+
+
+def product_type_probe_items() -> list[ScoreItem]:
+    """Garment-type captions from the fixed vocabulary."""
+    items: list[ScoreItem] = []
+    for label in MODEL_GARMENT_TYPES:
         article, _spoken = _product_type_phrase(label)
         items.append(ScoreItem(label, _product_type_caption(label), article=article))
     return items
 
 
-def prompts_for_pool(pool_slug: str, labels: list[str]) -> list[ScoreItem]:
+def prompts_for_pool(pool_slug: str) -> list[ScoreItem]:
     """Build the CLIP captions that will be scored for one pool."""
     canonical = resolve_taxonomy(pool_slug)
     if canonical is None:
         raise ValueError(f"unsupported taxonomy: {pool_slug}")
     if canonical == "colour":
-        return colour_probe_items(labels)
+        return colour_probe_items()
     if canonical == "subjects":
         return graphic_motif_items()
     if canonical == "product-type":
-        return product_type_probe_items(labels)
+        return product_type_probe_items()
+    if canonical == "pattern":
+        return pattern_probe_items()
+    if canonical == "pattern-application":
+        return pattern_application_probe_items()
+    if canonical == "embellishment":
+        return embellishment_probe_items()
+    if canonical == "lustre":
+        return lustre_probe_items()
+    if canonical == "appearance":
+        return appearance_probe_items()
     if canonical in STYLE_POOLS:
         return style_probe_items(canonical)
-    return [ScoreItem(label, caption_for_label(pool_slug, label)) for label in labels]
+    raise ValueError(f"unsupported taxonomy: {pool_slug}")
 
 
-# Legacy slugs from before ``subjects`` was an opt-in pool.
-IGNORED_POOL_SLUGS: frozenset[str] = frozenset({"graphic-theme", "graphic_theme"})
+def unknown_option_keys(raw_options: dict[str, object]) -> list[str]:
+    """Return option keys that are not recognised classifiers."""
+    unknown: list[str] = []
+    for key in raw_options:
+        if resolve_taxonomy(key) is None:
+            unknown.append(key)
+    return unknown

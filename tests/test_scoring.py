@@ -13,7 +13,7 @@ from src.scoring import (
     _with_rank_gaps,
     score_pools_for_image,
 )
-from src.taxonomies import GRAPHIC_MOTIFS, MODEL_GARMENT_TYPES, graphic_motif_items
+from src.taxonomies import GRAPHIC_MOTIFS, MODEL_GARMENT_TYPES, MODEL_PATTERNS, graphic_motif_items
 
 
 def test_normalise_to_unit_interval() -> None:
@@ -34,10 +34,10 @@ def test_rank_gaps_use_the_full_list() -> None:
         [
             {"value": "Floral", "score": 0.70},
             {"value": "Striped", "score": 0.66},
-            {"value": "Plain", "score": 0.51},
+            {"value": "Checked", "score": 0.51},
         ]
     )
-    assert [entry["value"] for entry in ranked] == ["Floral", "Striped", "Plain"]
+    assert [entry["value"] for entry in ranked] == ["Floral", "Striped", "Checked"]
     assert ranked[0]["gap"] == pytest.approx(0.04)
     assert ranked[1]["gap"] == pytest.approx(0.15)
     assert ranked[2]["gap"] == 0.0
@@ -93,11 +93,7 @@ def test_colour_probes_model_space_and_featured_combinations(
     _patch_scoring(monkeypatch, captured)
     result = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={
-            "colour": [],
-            "pattern": ["Floral", "Striped", "Plain", "Check"],
-        },
-        top_k=1,
+        enabled_slugs=("colour", "pattern"),
     )
     colour = result["scores"]["colour"]
     by_kind: dict[str, list[str]] = {}
@@ -108,11 +104,12 @@ def test_colour_probes_model_space_and_featured_combinations(
     assert "Red mix" in by_kind["mix"]
     assert by_kind["combination"] == ["Silver, Gold and Lilac"]
     assert "Chartreuse" not in by_kind["solid"]
-    assert [entry["value"] for entry in result["scores"]["pattern"]] == ["Check"]
+    assert [entry["value"] for entry in result["scores"]["pattern"]][-1] == MODEL_PATTERNS[0]
+    assert result["scores"]["pattern"][0]["value"] == MODEL_PATTERNS[-1]
     assert "subjects" not in result["scores"]
     assert captured["prompts"][0][0] == "a garment that is black in colour"
     assert any(prompt == "a multicolour garment with grey hues" for prompt in captured["prompts"][0])
-    assert captured["prompts"][2][0] == "a garment with a floral pattern"
+    assert captured["prompts"][2][0] == "a garment with an abstract pattern"
     pattern = result["scores"]["pattern"]
     assert "p" in pattern[0]
     assert pattern[0]["gap"] > 0
@@ -120,38 +117,19 @@ def test_colour_probes_model_space_and_featured_combinations(
     assert "gap" in colour[0]
 
 
-def test_colour_caller_extras_are_merged_into_model_probes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-    _patch_scoring(monkeypatch, captured)
-    result = score_pools_for_image(
-        image_url="https://example.com/a.jpg",
-        pools={"colour": ["Chartreuse"]},
-        top_k=1,
-    )
-    values = [entry["value"] for entry in result["scores"]["colour"]]
-    assert "Chartreuse" in values
-    assert "Chartreuse mix" in values
-    assert "Black" in values
-    assert "subjects" not in result["scores"]
-
-
-def test_subjects_only_when_pool_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_subjects_only_when_option_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
     _patch_scoring(monkeypatch, captured)
     without = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"pattern": ["Floral", "Striped"]},
-        top_k=1,
+        enabled_slugs=("pattern",),
     )
     assert "subjects" not in without["scores"]
     assert len(captured["prompts"]) == 1
 
     with_subjects = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"pattern": ["Floral"], "subjects": []},
-        top_k=1,
+        enabled_slugs=("pattern", "subjects"),
     )
     assert {entry["value"] for entry in with_subjects["scores"]["subjects"]} == set(GRAPHIC_MOTIFS)
     assert captured["prompts"][-1][0] == graphic_motif_items()[0].caption
@@ -159,13 +137,12 @@ def test_subjects_only_when_pool_requested(monkeypatch: pytest.MonkeyPatch) -> N
     assert with_subjects["scores"]["subjects"][0]["gap"] >= 0
 
 
-def test_product_type_uses_hardcoded_list_when_pool_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_product_type_uses_hardcoded_list(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
     _patch_scoring(monkeypatch, captured)
     result = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"product-type": []},
-        top_k=1,
+        enabled_slugs=("product-type",),
     )
     types = result["scores"]["product-type"]
     assert {entry["value"] for entry in types} == set(MODEL_GARMENT_TYPES)
@@ -183,15 +160,13 @@ def test_shorts_style_is_opt_in_and_returns_distinct_probes(
     _patch_scoring(monkeypatch, captured)
     without = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"pattern": ["Floral"]},
-        top_k=1,
+        enabled_slugs=("pattern",),
     )
     assert "shorts-style" not in without["scores"]
 
     with_style = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"shorts-style": []},
-        top_k=1,
+        enabled_slugs=("shorts-style",),
     )
     values = {entry["value"] for entry in with_style["scores"]["shorts-style"]}
     assert {"Cargo Shorts", "Running Shorts", "Cycling Shorts"} <= values
@@ -199,30 +174,40 @@ def test_shorts_style_is_opt_in_and_returns_distinct_probes(
     assert captured["prompts"][-1][0] == "a pair of cargo shorts"
 
 
-def test_exclusive_softmax_and_gap_survive_top_k(
+def test_exclusive_softmax_and_gap_use_full_catalog(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
     _patch_scoring(monkeypatch, captured)
     result = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"pattern": ["Floral", "Striped", "Plain"], "product-type": []},
-        top_k=1,
+        enabled_slugs=("pattern", "product-type"),
     )
     pattern = result["scores"]["pattern"]
-    assert [entry["value"] for entry in pattern] == ["Plain"]
-    assert pattern[0]["gap"] == pytest.approx(_normalise_to_unit_interval(-0.86) - _normalise_to_unit_interval(-0.88))
+    assert pattern[0]["value"] == MODEL_PATTERNS[-1]
+    last = _normalise_to_unit_interval(-0.9 + 0.02 * (len(MODEL_PATTERNS) - 1))
+    previous = _normalise_to_unit_interval(-0.9 + 0.02 * (len(MODEL_PATTERNS) - 2))
+    assert pattern[0]["gap"] == pytest.approx(last - previous)
     assert 0.0 < float(pattern[0]["p"]) <= 1.0
     product = result["scores"]["product-type"]
     assert {entry["value"] for entry in product} == set(MODEL_GARMENT_TYPES)
     assert "p" in product[0]
-    full_pattern = score_pools_for_image(
+    assert sum(float(entry["p"]) for entry in pattern) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_appearance_scores_combined_exclusive_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    _patch_scoring(monkeypatch, captured)
+    result = score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"pattern": ["Floral", "Striped", "Plain"]},
-        top_k=5,
-    )["scores"]["pattern"]
-    assert sum(float(entry["p"]) for entry in full_pattern) == pytest.approx(1.0, abs=1e-5)
-    assert full_pattern[0]["value"] == "Plain"
+        enabled_slugs=("appearance",),
+    )
+    appearance = result["scores"]["appearance"]
+    assert len(appearance) == 12 + 49 + 7 + 8
+    assert "p" in appearance[0]
+    assert sum(float(entry["p"]) for entry in appearance) == pytest.approx(1.0, abs=1e-5)
+    assert "pattern" not in result["scores"]
+    assert len(captured["prompts"][0]) == 12 + 49 + 7 + 8
 
 
 def test_generic_caption_style_uses_the_old_shared_template(
@@ -232,15 +217,13 @@ def test_generic_caption_style_uses_the_old_shared_template(
     _patch_scoring(monkeypatch, captured)
     score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"pattern": ["Floral", "Striped"]},
-        top_k=2,
+        enabled_slugs=("pattern",),
         caption_style="generic",
     )
-    assert captured["prompts"][0] == ["a garment with floral", "a garment with striped"]
+    assert captured["prompts"][0][0] == "a garment with abstract"
     score_pools_for_image(
         image_url="https://example.com/a.jpg",
-        pools={"subjects": []},
-        top_k=2,
+        enabled_slugs=("subjects",),
         caption_style="generic",
     )
     assert captured["prompts"][-1][0] == "a garment with brand logo"
@@ -251,7 +234,8 @@ def test_score_pools_for_images_batches_image_inference_and_reuses_text_embeddin
         def __call__(self, *, images=None, text=None, return_tensors=None, padding=None):
             if images is not None:
                 return {"pixel_values": torch.tensor([[1.0], [2.0]])}
-            return {"input_ids": torch.tensor([[1.0, 0.0], [0.0, 1.0]])}
+            n = len(text or [])
+            return {"input_ids": torch.zeros((n, 2))}
 
     class FakeModel:
         def __init__(self) -> None:
@@ -264,7 +248,16 @@ def test_score_pools_for_images_batches_image_inference_and_reuses_text_embeddin
 
         def get_text_features(self, **kwargs):
             self.text_calls += 1
-            return torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+            n = kwargs["input_ids"].shape[0]
+            rows = []
+            for index in range(n):
+                if index == 0:
+                    rows.append([1.0, 0.0])
+                elif index == n - 1:
+                    rows.append([0.0, 1.0])
+                else:
+                    rows.append([0.1, 0.1])
+            return torch.tensor(rows)
 
     model = FakeModel()
     scoring._text_embeddings_for_captions.cache_clear()
@@ -273,12 +266,11 @@ def test_score_pools_for_images_batches_image_inference_and_reuses_text_embeddin
 
     scores_by_index, errors = scoring.score_pools_for_images(
         image_urls=["https://example.com/a.jpg", "https://example.com/b.jpg"],
-        pools={"pattern": ["Floral", "Stripe"]},
-        top_k=2,
+        enabled_slugs=("pattern",),
     )
 
     assert errors == {}
-    assert scores_by_index[0]["pattern"][0]["value"] == "Floral"
-    assert scores_by_index[1]["pattern"][0]["value"] == "Stripe"
+    assert scores_by_index[0]["pattern"][0]["value"] == MODEL_PATTERNS[0]
+    assert scores_by_index[1]["pattern"][0]["value"] == MODEL_PATTERNS[-1]
     assert model.image_calls == 1
     assert model.text_calls == 1

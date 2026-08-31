@@ -1,10 +1,10 @@
 # Print vision API (`POST /v1/score`)
 
-FashionCLIP scores for product images. Inventory sends image URLs and label pools; this service returns ranked scores only. **Thresholding, promotion, and attribute writes live in inventory** (`PRINT_VISION_*`), not here.
+FashionCLIP scores for product images. Inventory sends image URLs and boolean classifier flags; this service returns ranked scores from **service-owned vocabularies**. **Thresholding, promotion, and attribute writes live in inventory** (`PRINT_VISION_*`), not here.
 
 Machine-readable contract: [`openapi/v1-score.yaml`](../openapi/v1-score.yaml).
 
-`POST /v1/score` also accepts `{"warmup": true}` to load the model without scoring. Throughput-sensitive callers can use `POST /v1/score-batch` (up to 16 items, shared `pools`).
+`POST /v1/score` also accepts `{"warmup": true}` to load the model without scoring. Throughput-sensitive callers can use `POST /v1/score-batch` (up to 16 items, shared `options`).
 
 ## Authentication
 
@@ -20,52 +20,62 @@ Base URL is environment-specific (`PRINT_VISION_URL` in inventory).
 ```json
 {
   "images": [{"url": "https://cdn.example.com/garment.jpg"}],
-  "pools": {
-    "pattern-application": ["Placement print", "All-over print"],
-    "pattern": ["Floral", "Striped", "Plain"],
-    "colour": []
-  },
-  "top_k": 3
+  "options": {
+    "pattern": true,
+    "pattern-application": true,
+    "colour": true
+  }
 }
 ```
 
 | Field | Required | Notes |
 |-------|----------|-------|
 | `images` | yes | 1–2 objects, each with `url` (`http` or `https`). |
-| `pools` | yes | Non-empty map of pool slug → label list. See [Pools](#pools). |
-| `top_k` | no | Default `3`, max `5`. Applies to **print** pools only (`pattern`, `pattern-application`). |
+| `options` | yes | Map of classifier slug → boolean. Missing keys are `false`. At least one `true` is required. |
 
-### Pools
+### Options
 
-Every classification is **opt-in**: only slugs present in `pools` are scored. Omit a slug → no work, no response key.
+Every classifier is **opt-in**. `true` runs that pool against the service-owned vocabulary. Omit a key or send `false` → no work, no response key.
 
-Closed taxonomy. Unknown slugs → `400 unknown_taxonomy`.
+Unknown keys → `400 unknown_option`. Non-boolean values → `400 invalid_request`.
 
-| Slug | Aliases | Request | `top_k` | Response key |
-|------|---------|---------|---------|--------------|
-| `pattern-application` | `pattern_application` | label list (required) | yes | `scores.pattern-application` |
-| `pattern` | — | label list (required) | yes | `scores.pattern` |
-| `colour` | `color` | `[]` or extras | **ignored** | `scores.colour` |
-| `subjects` | — | `[]` only | **ignored** | `scores.subjects` |
-| `product-type` | `product_type` | `[]` or extras | **ignored** | `scores.product-type` |
-| `sleeve-length` | — | `[]` only | **ignored** | `scores.sleeve-length` |
-| `neckline` | — | `[]` only | **ignored** | `scores.neckline` |
-| `trouser-length` | — | `[]` only | **ignored** | `scores.trouser-length` |
-| `skirt-length` | — | `[]` only | **ignored** | `scores.skirt-length` |
-| `dress-length` | — | `[]` only | **ignored** | `scores.dress-length` |
-| `shorts-style` | — | `[]` only | **ignored** | `scores.shorts-style` |
+| Slug | Aliases | Catalog | Response key |
+|------|---------|---------|--------------|
+| `pattern-application` | `pattern_application` | 12 warehouse techniques | `scores.pattern-application` |
+| `pattern` | — | 49 patterns (warehouse prod plus `Flames`) | `scores.pattern` |
+| `embellishment` | — | 7 warehouse embellishments | `scores.embellishment` |
+| `lustre` | — | 8 fabric lustre / light effects | `scores.lustre` |
+| `appearance` | — | Combined exclusive pool: all four appearance facets above (76 labels) | `scores.appearance` |
+| `colour` | `color` | 24 model colour probes | `scores.colour` |
+| `subjects` | — | 45 graphic-theme motifs | `scores.subjects` |
+| `product-type` | `product_type` | 141 garment types | `scores.product-type` |
+| `sleeve-length` | — | sleeve styles | `scores.sleeve-length` |
+| `neckline` | — | necklines | `scores.neckline` |
+| `trouser-length` | — | trouser lengths | `scores.trouser-length` |
+| `skirt-length` | — | skirt lengths | `scores.skirt-length` |
+| `dress-length` | — | dress lengths | `scores.dress-length` |
+| `shorts-style` | — | shorts silhouettes | `scores.shorts-style` |
 
-**Legacy:** `graphic-theme` / `graphic_theme` is ignored (no `400`). Use `subjects: []` instead.
+Callers do **not** send label lists. Vocabularies are warehouse prod `Attribute.choices` (print / embellishment) or service-owned catalogs (colour, subjects, product-type, style).
 
-**Print pools** — caller sends the label list (inventory’s candidate values). Known labels get tailored captions; unknown labels use the taxonomy fallback.
+Use **`appearance`** when inventory wants one ranked winner across pattern-application, pattern, embellishment, and lustre (warehouse groups these under Appearance). Use the individual flags when you need facet-specific reads — they use different CLIP prompt families because each facet looks different in the image (see below).
 
-**Catalog pools** — `colour`, `subjects`, and `product-type` use **service-owned vocabularies**. Empty `[]` is enough. Optional extra strings are merged in for `colour` and `product-type` only (not `subjects`).
+Style scores are indicative: use a score/gap floor and avoid persisting a value when the relevant garment area is hidden.
 
-**Style pools** — `sleeve-length`, `neckline`, `trouser-length`, `skirt-length`,
-`dress-length`, and `shorts-style` use fixed service-owned vocabularies. Empty
-`[]` is enough. They return all ranked candidates and use `p` because each pool
-represents one primary choice. Style scores are indicative: use a score/gap
-floor and avoid persisting a value when the relevant garment area is hidden.
+### Appearance prompting
+
+The four appearance facets are **orthogonal** in the warehouse — a garment can be floral *and* placement-print *and* sequinned *and* glossy. CLIP captions therefore use a **different visual question** per facet:
+
+| Facet | What the model is asked | Prompt family |
+|-------|-------------------------|---------------|
+| `pattern` | What **motif** repeats on the surface? | `a garment with a repeating {motif} pattern on the fabric surface` |
+| `pattern-application` | **How/where** is decoration applied? | Coverage and technique — placement vs all-over, woven vs printed, resist-dye, etc. |
+| `embellishment` | What is **physically attached** on top? | Raised or sewn-on decoration — beads, sequins, embroidery, fringe |
+| `lustre` | How does **light** behave on the fabric? | `the garment's fabric has a {finish} …` — matte, gloss, shimmer, iridescence |
+
+**`appearance`** merges all four vocabularies into one exclusive pool (76 labels). Each label keeps its facet-specific caption, but softmax `p` is across unrelated visual dimensions — use it for single-winner triage, not multi-attribute writes. Prefer individual facet flags when persisting several Appearance attributes on one product.
+
+Known collisions to watch: **Glitter/Sparkly** (lustre) vs **Sequin** (embellishment); **Lace** (pattern-application, fabric construction) vs **Lace trim** (embellishment).
 
 ## Response
 
@@ -81,8 +91,8 @@ At least one image scored. Per-image failures appear in `errors` without failing
       "url": "https://cdn.example.com/garment.jpg",
       "scores": {
         "pattern": [
-          {"value": "Plain", "score": 0.71, "gap": 0.08, "p": 0.62},
-          {"value": "Floral", "score": 0.63, "gap": 0.05, "p": 0.28}
+          {"value": "Floral", "score": 0.71, "gap": 0.08, "p": 0.62},
+          {"value": "Striped", "score": 0.63, "gap": 0.05, "p": 0.28}
         ],
         "colour": [
           {"value": "Black", "score": 0.68, "gap": 0.04, "kind": "solid"},
@@ -103,14 +113,14 @@ At least one image scored. Per-image failures appear in `errors` without failing
 }
 ```
 
-Only keys for pools **requested** appear under `scores`.
+Only keys for classifiers **enabled** in `options` appear under `scores`.
 
 ### Errors
 
 | Status | `error` | When |
 |--------|---------|------|
-| `400` | `invalid_request` | Malformed JSON, bad URLs, empty pools after parsing, invalid `top_k`. |
-| `400` | `unknown_taxonomy` | Unsupported pool slug. Body includes `accepted` slug list. |
+| `400` | `invalid_request` | Malformed JSON, bad URLs, missing/empty `options`, or a non-boolean flag. |
+| `400` | `unknown_option` | Unsupported option key. Body includes `accepted` slug list. |
 | `422` | `all_images_failed` | Every image failed (`results` empty, `errors` populated). |
 
 Per-image `errors[]` entries:
@@ -134,19 +144,19 @@ Absolute values sit in a narrow band (many garments cluster around the middle). 
 
 ### `gap`
 
-Mapped-cosine drop to the **next** label in the **full** pool, computed **before** `top_k` truncation.
+Mapped-cosine drop to the **next** label in the **full** pool.
 
-- Large `gap` on the top label → clear winner vs runner-up (including labels omitted from the response).
+- Large `gap` on the top label → clear winner vs runner-up.
 - Near-zero `gap` → tie; do not promote on rank alone.
 - Last label in the full pool → `gap: 0`.
 
-Present on **all** lists: request pools, `colour`, and `subjects`.
+Present on **all** lists.
 
 ### `p` (exclusive pools only)
 
-Within-pool softmax over exclusive pools: **`pattern`**, **`pattern-application`**,
-**`product-type`**, and all style pools. Answers: “of the labels in this pool,
-what share went to the winner?”
+Within-pool softmax over exclusive pools: **`appearance`**, **`pattern`**, **`pattern-application`**,
+**`embellishment`**, **`lustre`**, **`product-type`**, and all style pools. Answers: “of the
+labels in this pool, what share went to the winner?”
 
 - **Not** a calibrated world probability.
 - **Not** comparable across different label lists or pools.
@@ -167,7 +177,7 @@ AND (optional, exclusive pools) p >= PRINT_VISION_P_FLOOR
 
 ## Subjects (graphic-theme)
 
-**Opt-in:** include `"subjects": []` in `pools`. Response: `scores.subjects` — the graphic-theme catalog below. Inventory reads `value` and writes it onto **graphic-theme** when thresholds pass.
+**Opt-in:** `"subjects": true`. Response: `scores.subjects` — the graphic-theme catalog below. Inventory reads `value` and writes it onto **graphic-theme** when thresholds pass.
 
 Captions name **visual synonyms** (lion, mermaid, anchor) and **exclude neighbouring buckets** (e.g. Ocean ≠ Nautical, Safari ≠ animal print). Leopard / tiger / zebra are **not** subjects — use **`pattern`** for animal print.
 
@@ -220,7 +230,7 @@ Birds, Cards, Celestial, Flame, Fruit, Lips, Mushroom, Peace, Rainbow, Tropical,
 
 ### Caller notes
 
-- Use `"subjects": []`, not `graphic-theme`.
+- Use `"subjects": true`. Unknown keys such as `graphic-theme` return `400 unknown_option`.
 - Do not promote `scores.subjects[0]` without `score` + `gap` floors.
 - Inferential buckets (Funny, Retro, Politics, Pop culture, Character) often score low.
 
@@ -228,55 +238,51 @@ Birds, Cards, Celestial, Flame, Fruit, Lips, Mushroom, Peace, Rainbow, Tropical,
 
 ## Product type
 
-**Opt-in:** include `"product-type": []` (or `product_type`). Response: `scores.product-type`.
+**Opt-in:** `"product-type": true` (or `product_type`). Response: `scores.product-type`.
 
 Uses a **fixed garment list** in the service (141 types) — callers do not send the vocabulary unless adding extras. Derived from warehouse ProductType `name_singular` (gendered/age prefixes stripped), then cleaned for CLIP: natural English plurality and title case as `value`; warehouse spellings stay as aliases. Visually distinct types stay (`Jeggings` ≠ `Leggings`, `Casual Shirt` ≠ `Formal Shirt`, `Boot`/`Boots`, `Shoe`/`Shoes`). **Named sets stay**; generic outfit/set catch-alls are omitted. Accessories stay; **homewares, sleeve accessories, pet/nursery niches, and use-case twins of a kept type** (Power / Sports / Swim Leggings → `Leggings`; Starter Bra → `Bra`; Swimming Trunks → `Trunks`) are omitted.
 
 Bag, Basketball Shoes, Beach Top, Beach Trousers, Belt, Bib, Bikini, Bikini Bottom, Bikini Top, Blazer, Blouse, Bodysuit, Boot, Bootie, Boots, Brogues, Boxer Shorts, Bra, Briefs, Camisole, Cape, Cardigan, Casual Shirt, Chelsea Boots, Chukka Boots, Clogs, Coat, Combat Boots, Corset, Court Shoes, Cowboy Boots, Dress, Dressing Gown, Dungarees, Espadrilles, Fleece, Flats, Flip-flops, Formal Shirt, Gilet, Glove, Hat, High Heels, High-Tops, Hiking Boots, Hoodie, Hoodie & Joggers Set, Jacket, Jeans, Jeggings, Joggers, Jumper, Jumpsuit, Kaftan, Knee-High Boots, Knickers, Knitted Vest, Leggings, Long Johns, Loafers, Mary Janes, Mules, Nightie, Onesie, Overshirt, Oxfords, Pants, Playsuit, Plimsolls, Platform Trainers, Polo Shirt, Poncho, Purse, Pyjama Bottom, Pyjama Top, Pyjamas, Romper, Riding Boots, Running Shoes, Sandal, Sarong, Scarf, Shawl & Wrap, Sheepskin Boots, Shoe, Shoes, Shorts, Skirt, Skort, Skate Shoes, Sleepsuit, Slipper, Slip-on Trainers, Snowsuit, Sock, Sports Bra, Sports Jacket, Sports Vest, Stockings, Suit, 2-Piece Suit, Suit Jacket, Suit Skirt, Suit Trousers, Sunglasses, Suspenders, Sweater, Sweater Set, Sweatshirt, Sweatshirt & Joggers Set, Swim Shorts, Swimsuit, T-shirt, Tank, Tankini, Tennis Shoes, Tie, Tights, Top, Top & Bottom Set, Top & Leggings Set, Top & Shorts Set, Top & Skirt Set, Top & Trousers Set, Towel Robe, Tracksuit, Tracksuit Bottom, Tracksuit Top, Trainer, Training Top, Trousers, Trunks, Tuxedo, Vest, Waistcoat, Wallet, Wedges, Wellington Boots, Wetsuit, Wetsuit Bottom, Wetsuit Top.
 
-Each type stores how it appears in English: ``article`` is `"a"`, `"an"`, or `""` (bare plural / mass noun, e.g. Trousers). CLIP captions use that plus an optional spoken form (`2-Piece Suit` → `a photo of a two-piece suit`). The same ``article`` is returned on each `scores.product-type` row so inventory can write “a dress” vs “trousers” without a second table. Extra caller labels (e.g. `"Kimono"`) infer a determiner; warehouse singulars (`Beach Trouser`) map to the plural row. **`top_k` is ignored** — all types are returned ranked. **`p`** is present (exclusive pool).
+Each type stores how it appears in English: ``article`` is `"a"`, `"an"`, or `""` (bare plural / mass noun, e.g. Trousers). CLIP captions use that plus an optional spoken form (`2-Piece Suit` → `a photo of a two-piece suit`). The same ``article`` is returned on each `scores.product-type` row so inventory can write “a dress” vs “trousers” without a second table. All types are returned ranked. **`p`** is present (exclusive pool).
 
 ---
 
 ## Style
 
-Style classification is opt-in and separate from `product-type`. Include an
-empty pool to request the service-owned vocabulary:
+Style classification is opt-in and separate from `product-type`. Set the
+relevant flags to `true`:
 
 ```json
 {
-  "sleeve-length": [],
-  "neckline": [],
-  "trouser-length": [],
-  "skirt-length": [],
-  "dress-length": [],
-  "shorts-style": []
+  "options": {
+    "sleeve-length": true,
+    "neckline": true,
+    "trouser-length": true,
+    "skirt-length": true,
+    "dress-length": true,
+    "shorts-style": true
+  }
 }
 ```
 
-The first five pools describe garment construction or length. `trouser-length`
+The first five classifiers describe garment construction or length. `trouser-length`
 includes `Short`, `Cropped`, `Three-Quarter Length`, `Ankle Length`, and `Full
 Length`. `shorts-style`
 distinguishes `Cargo Shorts`, `Running Shorts`, `Denim Shorts`, `Tailored
 Shorts`, `Chino Shorts`, `Cycling Shorts`, `Basketball Shorts`, `Swim Shorts`,
-and `Sweat Shorts`. Every style pool returns its complete ranked vocabulary;
-`top_k` is ignored and `p` is attached. These are model signals, not
-guaranteed attributes: do not persist a result when the relevant area is
-cropped, hidden, or tied.
+and `Sweat Shorts`. Every style classifier returns its complete ranked vocabulary
+and `p`. These are model signals, not guaranteed attributes: do not persist a
+result when the relevant area is cropped, hidden, or tied.
 
 ---
 
 ## Colour
 
-**The model’s opinion**, not an inventory colour taxonomy. When `colour` (or `color`) is present in `pools`, the service probes FashionCLIP’s Farfetch-trained colour language. **`top_k` is ignored** — every probe row is returned. Inventory interprets solids vs mixes vs combinations.
-
-### Request
-
-```json
-"colour": []
-```
-
-An empty list is enough. Extra strings are merged into the probe (e.g. `"colour": ["Chartreuse"]` adds Chartreuse solid + mix).
+**The model’s opinion**, not an inventory colour taxonomy. When `"colour": true`
+(or `"color": true`), the service probes FashionCLIP’s Farfetch-trained colour
+language. Every probe row is returned. Inventory interprets solids vs mixes vs
+combinations.
 
 ### Built-in vocabulary (24)
 
@@ -315,30 +321,33 @@ curl -sS -X POST "$PRINT_VISION_URL" \
   -H "x-api-key: $PRINT_VISION_API_KEY" \
   -d '{
     "images": [{"url": "https://cdn.example.com/tee.jpg"}],
-    "pools": {
-      "pattern-application": ["Placement print", "All-over print"],
-      "pattern": ["Floral", "Striped", "Plain"]
-    },
-    "top_k": 3
+    "options": {
+      "appearance": true
+    }
   }'
 ```
 
-Response includes only requested pools — catalog and style pools are omitted
-unless asked.
+Or enable individual appearance facets:
+
+```json
+{"options": {"pattern-application": true, "pattern": true, "embellishment": true, "lustre": true}}
+```
+
+Response includes only enabled classifiers — catalog and style pools are omitted
+unless requested.
 
 ### Full optional stack
 
 ```json
 {
   "images": [{"url": "https://cdn.example.com/legging.jpg"}],
-  "pools": {
-    "pattern-application": ["Placement print", "All-over print"],
-    "pattern": ["Floral", "Striped", "Plain"],
-    "colour": [],
-    "subjects": [],
-    "product-type": []
-  },
-  "top_k": 3
+  "options": {
+    "pattern-application": true,
+    "pattern": true,
+    "colour": true,
+    "subjects": true,
+    "product-type": true
+  }
 }
 ```
 
@@ -347,26 +356,12 @@ unless asked.
 ```json
 {
   "images": [{"url": "https://cdn.example.com/legging.jpg"}],
-  "pools": {
-    "pattern": ["Floral", "Striped", "Plain"],
-    "colour": []
-  },
-  "top_k": 2
-}
-```
-
-### Legacy `graphic-theme` in request (ignored)
-
-```json
-{
-  "pools": {
-    "graphic-theme": ["Safari"],
-    "pattern": ["Floral"]
+  "options": {
+    "pattern": true,
+    "colour": true
   }
 }
 ```
-
-Accepted; `graphic-theme` is dropped. Use `"subjects": []` instead.
 
 ---
 
