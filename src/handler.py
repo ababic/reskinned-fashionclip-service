@@ -11,6 +11,13 @@ import sentry_sdk
 from sentry_sdk.integrations.aws_lambda import AwsLambdaIntegration
 
 from src.scoring import ImageUnavailableError, _load_clip_components, score_pools_for_images
+from src.taxonomies import (
+    ACCEPTED_SLUGS,
+    IGNORED_POOL_SLUGS,
+    resolve_taxonomy,
+    returns_full_pool,
+    unsupported_pool_slugs,
+)
 
 _MAX_IMAGES = 2
 _MAX_BATCH_ITEMS = 16
@@ -83,9 +90,13 @@ def _parse_pools(raw_pools: object) -> dict[str, list[str]] | None:
     for slug, labels in raw_pools.items():
         if not isinstance(slug, str) or not isinstance(labels, list):
             return None
+        if slug.casefold() in IGNORED_POOL_SLUGS:
+            continue
         clean_labels = [label.strip() for label in labels if isinstance(label, str) and label.strip()]
         if clean_labels:
             parsed_pools[slug] = clean_labels
+        elif resolve_taxonomy(slug) is not None and returns_full_pool(slug):
+            parsed_pools[slug] = []
     if not parsed_pools:
         return None
     return parsed_pools
@@ -95,6 +106,20 @@ def _parse_top_k(raw_top_k: object) -> int | None:
     if not isinstance(raw_top_k, int) or raw_top_k < 1:
         return None
     return min(raw_top_k, _MAX_TOP_K)
+
+
+def _unknown_taxonomy_response(pools: dict[str, list[str]]) -> dict[str, object] | None:
+    unknown = unsupported_pool_slugs(list(pools))
+    if not unknown:
+        return None
+    return _response(
+        400,
+        {
+            "error": "unknown_taxonomy",
+            "detail": f"unsupported pool slugs: {', '.join(unknown)}",
+            "accepted": list(ACCEPTED_SLUGS),
+        },
+    )
 
 
 def _parse_request(event: dict[str, object]) -> tuple[list[str], dict[str, list[str]], int] | None:
@@ -274,6 +299,9 @@ def lambda_handler(event: dict[str, object], context: object) -> dict[str, objec
         if parsed_batch is None:
             return _response(400, {"error": "invalid_request"})
         jobs, pools, top_k = parsed_batch
+        taxonomy_error = _unknown_taxonomy_response(pools)
+        if taxonomy_error is not None:
+            return taxonomy_error
         items, successful_images = _score_batch_request(jobs, pools, top_k)
         if not successful_images:
             return _response(422, {"error": "all_images_failed", "items": items})
@@ -283,6 +311,9 @@ def lambda_handler(event: dict[str, object], context: object) -> dict[str, objec
     if parsed is None:
         return _response(400, {"error": "invalid_request"})
     image_urls, pools, top_k = parsed
+    taxonomy_error = _unknown_taxonomy_response(pools)
+    if taxonomy_error is not None:
+        return taxonomy_error
     results, errors = _score_one_request(image_urls, pools, top_k)
 
     if not results:

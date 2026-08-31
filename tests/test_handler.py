@@ -26,6 +26,68 @@ def test_parse_request_valid() -> None:
     assert top_k == 2
 
 
+def test_parse_request_allows_empty_colour_pool() -> None:
+    event = {
+        "body": json.dumps(
+            {
+                "images": [{"url": "https://example.com/a.jpg"}],
+                "pools": {"colour": []},
+            }
+        )
+    }
+    parsed = _parse_request(event)
+    assert parsed is not None
+    _urls, pools, _top_k = parsed
+    assert pools == {"colour": []}
+
+
+def test_parse_request_allows_empty_catalog_pools() -> None:
+    for slug in (
+        "colour",
+        "subjects",
+        "product-type",
+        "sleeve-length",
+        "neckline",
+        "trouser-length",
+        "skirt-length",
+        "dress-length",
+        "shorts-style",
+    ):
+        event = {
+            "body": json.dumps(
+                {
+                    "images": [{"url": "https://example.com/a.jpg"}],
+                    "pools": {slug: []},
+                }
+            )
+        }
+        parsed = _parse_request(event)
+        assert parsed is not None
+        _urls, pools, _top_k = parsed
+        assert pools == {slug: []}
+
+
+def test_parse_request_ignores_legacy_graphic_theme_pool() -> None:
+    event = {
+        "body": json.dumps(
+            {
+                "images": [{"url": "https://example.com/a.jpg"}],
+                "pools": {"graphic-theme": ["Lion"], "pattern": ["Floral"]},
+            }
+        )
+    }
+    parsed = _parse_request(event)
+    assert parsed is not None
+    _urls, pools, _top_k = parsed
+    assert pools == {"pattern": ["Floral"]}
+    assert (
+        _parse_request(
+            {"body": json.dumps({"images": [{"url": "https://example.com/a.jpg"}], "pools": {"graphic-theme": []}})}
+        )
+        is None
+    )
+
+
 def test_parse_request_rejects_invalid_body() -> None:
     assert _parse_request({"body": "not-json"}) is None
     assert _parse_request({"body": json.dumps({"images": [], "pools": {"x": ["y"]}})}) is None
@@ -82,15 +144,84 @@ def test_lambda_handler_invalid_request() -> None:
     assert response["statusCode"] == 400
 
 
+def test_lambda_handler_unknown_taxonomy() -> None:
+    response = lambda_handler(
+        {
+            "body": json.dumps(
+                {
+                    "images": [{"url": "https://example.com/a.jpg"}],
+                    "pools": {"texture": ["Smooth"]},
+                }
+            )
+        },
+        None,
+    )
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["error"] == "unknown_taxonomy"
+    assert "texture" in body["detail"]
+    assert "pattern" in body["accepted"]
+    assert "graphic-theme" not in body["accepted"]
+
+
+def _fake_batched_scores(
+    *,
+    image_urls: list[str],
+    pools: dict[str, list[str]],
+    top_k: int,
+) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
+    del image_urls, top_k
+    return (
+        {0: {slug: [{"value": labels[0] if labels else slug, "score": 0.9}] for slug, labels in pools.items()}},
+        {},
+    )
+
+
 def test_lambda_handler_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.handler.score_pools_for_images", _fake_batched_scores)
+
+    response = lambda_handler(
+        {
+            "body": json.dumps(
+                {
+                    "images": [{"url": "https://example.com/a.jpg"}],
+                    "pools": {
+                        "pattern": ["Floral"],
+                        "pattern-application": ["Placement print"],
+                        "colour": [],
+                        "subjects": [],
+                        "product-type": [],
+                    },
+                }
+            )
+        },
+        None,
+    )
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    scores = body["results"][0]["scores"]
+    assert scores["pattern"][0]["value"] == "Floral"
+    assert "graphic-theme" not in scores
+    assert scores["colour"][0]["value"] == "colour"
+    assert scores["product-type"][0]["value"] == "product-type"
+    assert scores["subjects"][0]["value"] == "subjects"
+
+
+def test_lambda_handler_accepts_taxonomy_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, list[str]] = {}
+
     def _fake_score(
         *,
         image_urls: list[str],
         pools: dict[str, list[str]],
         top_k: int,
     ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
-        assert image_urls == ["https://example.com/a.jpg"]
-        return ({0: {"pattern": [{"value": "Floral", "score": 0.9}]}}, {})
+        del image_urls, top_k
+        seen.update(pools)
+        return (
+            {0: {slug: [{"value": labels[0] if labels else slug, "score": 0.8}] for slug, labels in pools.items()}},
+            {},
+        )
 
     monkeypatch.setattr("src.handler.score_pools_for_images", _fake_score)
 
@@ -99,15 +230,14 @@ def test_lambda_handler_success(monkeypatch: pytest.MonkeyPatch) -> None:
             "body": json.dumps(
                 {
                     "images": [{"url": "https://example.com/a.jpg"}],
-                    "pools": {"pattern": ["Floral"]},
+                    "pools": {"color": ["Navy"], "product_type": ["Dress"], "graphic_theme": ["Skull"]},
                 }
             )
         },
         None,
     )
     assert response["statusCode"] == 200
-    body = json.loads(response["body"])
-    assert body["results"][0]["scores"]["pattern"][0]["value"] == "Floral"
+    assert set(seen) == {"color", "product_type"}
 
 
 def test_lambda_handler_warmup(monkeypatch: pytest.MonkeyPatch) -> None:

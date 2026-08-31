@@ -4,7 +4,13 @@ info:
   version: "1"
   description: |
     POST product image URLs with attribute label pools; receive ranked FashionCLIP scores.
-    Thresholding and promotion policy live in reskinned-inventory (PRINT_VISION_*).
+
+    **Human-readable guide:** [`docs/api.md`](../docs/api.md) — pools, optional
+    catalog/style classifiers, and `score` / `gap` / `p`.
+
+    Thresholding and promotion policy live in reskinned-inventory (`PRINT_VISION_*`).
+    Pool slugs are a closed taxonomy; each slug uses an aspect-specific CLIP caption.
+  x-readme: docs/api.md
 servers:
   - url: https://{apiId}.execute-api.eu-west-1.amazonaws.com/prod
     variables:
@@ -14,6 +20,10 @@ paths:
   /v1/score:
     post:
       summary: Score images against label pools or warm the model
+      description: |
+        Score 1–2 garment images. Only slugs present in `pools` are scored.
+        Optional catalog/style pools use service-owned vocabularies. See
+        `docs/api.md`. Send `{"warmup": true}` to load the model without scoring.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -24,6 +34,36 @@ paths:
               oneOf:
                 - $ref: "#/components/schemas/ScoreRequest"
                 - $ref: "#/components/schemas/WarmupRequest"
+            examples:
+              print_only:
+                summary: Print facets (inventory today)
+                value:
+                  images:
+                    - url: https://cdn.example.com/garment.jpg
+                  pools:
+                    pattern-application: [Placement print, All-over print]
+                    pattern: [Floral, Striped, Plain]
+                  top_k: 3
+              with_colour:
+                summary: Print + colour probe
+                value:
+                  images:
+                    - url: https://cdn.example.com/legging.jpg
+                  pools:
+                    pattern: [Floral, Striped, Plain]
+                    colour: []
+                  top_k: 2
+              full_optional:
+                summary: Print + optional catalog pools
+                value:
+                  images:
+                    - url: https://cdn.example.com/legging.jpg
+                  pools:
+                    pattern: [Floral, Striped, Plain]
+                    colour: []
+                    subjects: []
+                    product-type: []
+                  top_k: 3
       responses:
         "200":
           description: At least one image scored successfully
@@ -31,13 +71,94 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScoreResponse"
+              examples:
+                success:
+                  summary: One image scored
+                  value:
+                    results:
+                      - image_index: 0
+                        url: https://cdn.example.com/garment.jpg
+                        scores:
+                          pattern:
+                            - value: Plain
+                              score: 0.71
+                              gap: 0.08
+                              p: 0.62
+                            - value: Floral
+                              score: 0.63
+                              gap: 0.05
+                              p: 0.28
+                          colour:
+                            - value: Black
+                              score: 0.68
+                              gap: 0.04
+                              kind: solid
+                            - value: Grey mix
+                              score: 0.61
+                              gap: 0.02
+                              kind: mix
+                          subjects:
+                            - value: Safari
+                              score: 0.42
+                              gap: 0.01
+                          product-type:
+                            - value: Leggings
+                              score: 0.55
+                              gap: 0.03
+                              p: 0.48
+                              article: ""
+                    errors: []
         "400":
-          description: Invalid request body
+          description: Invalid request body or unknown pool taxonomy
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRequestError"
+                  - $ref: "#/components/schemas/UnknownTaxonomyError"
+              examples:
+                invalid_request:
+                  value:
+                    error: invalid_request
+                unknown_taxonomy:
+                  value:
+                    error: unknown_taxonomy
+                    detail: "unsupported pool slugs: texture"
+                    accepted:
+                      - pattern-application
+                      - pattern
+                      - colour
+                      - subjects
+                      - product-type
+                      - sleeve-length
+                      - neckline
+                      - trouser-length
+                      - skirt-length
+                      - dress-length
+                      - shorts-style
         "422":
           description: All images failed to score
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AllImagesFailedError"
+              examples:
+                all_failed:
+                  value:
+                    error: all_images_failed
+                    results: []
+                    errors:
+                      - image_index: 0
+                        url: https://cdn.example.com/missing.jpg
+                        error: image_unavailable
+                        detail: http_404
   /v1/score-batch:
     post:
       summary: Score a bounded batch of product images against shared label pools
+      description: |
+        Score up to 16 product items in one request. Each item has a caller
+        `key` and 1–2 image URLs. `pools` are shared and follow the same
+        taxonomy rules as `/v1/score`.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -54,7 +175,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/BatchScoreResponse"
         "400":
-          description: Invalid request body
+          description: Invalid request body or unknown pool taxonomy
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRequestError"
+                  - $ref: "#/components/schemas/UnknownTaxonomyError"
         "422":
           description: All images failed to score
 components:
@@ -86,17 +213,61 @@ components:
               url:
                 type: string
                 format: uri
+                description: Public `http` or `https` product image URL.
         pools:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              type: string
+          $ref: "#/components/schemas/ScorePools"
         top_k:
           type: integer
           minimum: 1
           maximum: 5
           default: 3
+          description: |
+            Max labels per print pool (`pattern`, `pattern-application`).
+            Ignored for catalog/style pools (`colour`, `subjects`, `product-type`,
+            and the style pools). `gap` uses the full pool before print-pool
+            truncation.
+    ScorePools:
+      type: object
+      description: |
+        Closed set of taxonomies. Response keys match request slugs.
+
+        See `docs/api.md` for full behaviour.
+
+        **Print (inventory today):** `pattern-application`, `pattern`.
+
+        **Colour:** `colour` / `color` — model opinion; empty `[]` is valid.
+        Returns solids, hue-anchored mixes, and one 3-colour combination.
+        `top_k` ignored.
+
+        **Subjects:** `subjects` — graphic-theme catalog; empty `[]` only.
+        `top_k` ignored.
+
+        **Product type:** `product-type` / `product_type` — 141 garment
+        types (plural-normalised warehouse leaves; homewares omitted);
+        empty `[]` or optional extra labels. `top_k` ignored.
+
+        **Style:** `sleeve-length`, `neckline`, `trouser-length`,
+        `skirt-length`, `dress-length`, and `shorts-style` are optional
+        service-owned pools; empty `[]` is valid and `top_k` is ignored.
+
+        **Legacy:** `graphic-theme` / `graphic_theme` is **ignored**.
+        Use `subjects: []` instead.
+      additionalProperties:
+        type: array
+        items:
+          type: string
+      example:
+        pattern-application: [Placement print, All-over print]
+        pattern: [Floral, Striped, Plain]
+        colour: []
+        subjects: []
+        product-type: []
+        sleeve-length: []
+        neckline: []
+        trouser-length: []
+        skirt-length: []
+        dress-length: []
+        shorts-style: []
     BatchScoreRequest:
       type: object
       required: [items, pools]
@@ -108,11 +279,7 @@ components:
           items:
             $ref: "#/components/schemas/BatchScoreItem"
         pools:
-          type: object
-          additionalProperties:
-            type: array
-            items:
-              type: string
+          $ref: "#/components/schemas/ScorePools"
         top_k:
           type: integer
           minimum: 1
@@ -147,32 +314,130 @@ components:
                 type: string
               results:
                 type: array
+                items:
+                  $ref: "#/components/schemas/ImageResult"
               errors:
                 type: array
+                items:
+                  $ref: "#/components/schemas/ImageError"
+    LabelScore:
+      type: object
+      required: [value, score, gap]
+      properties:
+        value:
+          type: string
+          description: Label name (pool label, colour name, subject, or garment type).
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Mapped cosine in [0, 1]. Inventory thresholds apply to this field.
+        gap:
+          type: number
+          minimum: 0
+          description: |
+            Mapped-cosine drop to the next label in the full pool (before `top_k`).
+            Zero on the last full-pool label.
+        p:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Within-pool softmax. Present on exclusive pools (`pattern`,
+            `pattern-application`, `product-type`, and style pools). Absent on
+            `colour` and `subjects`.
+        kind:
+          type: string
+          description: Colour rows only.
+          enum: [solid, mix, combination]
+        article:
+          type: string
+          description: |
+            Product-type rows only. `"a"`, `"an"`, or `""` (bare plural / mass
+            noun). Use for copy: "a dress" vs "trousers".
+    ColourLabelScore:
+      allOf:
+        - $ref: "#/components/schemas/LabelScore"
+        - type: object
+          required: [kind]
+          properties:
+            kind:
+              type: string
+              enum: [solid, mix, combination]
+    ImageResult:
+      type: object
+      required: [image_index, url, scores]
+      properties:
+        image_index:
+          type: integer
+        url:
+          type: string
+        scores:
+          type: object
+          description: Keys match requested pool slugs only.
+          additionalProperties:
+            type: array
+            items:
+              oneOf:
+                - $ref: "#/components/schemas/LabelScore"
+                - $ref: "#/components/schemas/ColourLabelScore"
+    ImageError:
+      type: object
+      required: [image_index, url, error, detail]
+      properties:
+        image_index:
+          type: integer
+        url:
+          type: string
+        error:
+          type: string
+          enum: [image_unavailable, scoring_failed]
+        detail:
+          type: string
     ScoreResponse:
       type: object
+      required: [results, errors]
       properties:
         results:
           type: array
           items:
-            type: object
-            properties:
-              image_index:
-                type: integer
-              url:
-                type: string
-              scores:
-                type: object
-                additionalProperties:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      value:
-                        type: string
-                      score:
-                        type: number
+            $ref: "#/components/schemas/ImageResult"
         errors:
           type: array
           items:
-            type: object
+            $ref: "#/components/schemas/ImageError"
+    InvalidRequestError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: [invalid_request]
+    UnknownTaxonomyError:
+      type: object
+      required: [error, detail, accepted]
+      properties:
+        error:
+          type: string
+          enum: [unknown_taxonomy]
+        detail:
+          type: string
+        accepted:
+          type: array
+          items:
+            type: string
+    AllImagesFailedError:
+      type: object
+      required: [error, results, errors]
+      properties:
+        error:
+          type: string
+          enum: [all_images_failed]
+        results:
+          type: array
+          maxItems: 0
+          items: {}
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageError"
