@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
@@ -11,6 +12,20 @@ from typing import Any
 import requests
 import torch
 from PIL import Image, UnidentifiedImageError
+
+from src.taxonomies import (
+    GRAPHIC_MOTIFS,
+    MODEL_COLOURS,
+    MODEL_GARMENT_TYPES,
+    STYLE_POOLS,
+    ScoreItem,
+    colour_combination_items,
+    featured_solid_colours,
+    pool_is_exclusive,
+    prompts_for_pool,
+    resolve_taxonomy,
+    returns_full_pool,
+)
 
 # Baked into the Lambda image by the Dockerfile; falls back to HF hub for local runs.
 _DEFAULT_MODEL_ID = "patrickjohncyh/fashion-clip"
@@ -31,6 +46,37 @@ def _normalise_to_unit_interval(raw_score: float) -> float:
     return max(0.0, min(1.0, (raw_score + 1.0) / 2.0))
 
 
+def _softmax(values: list[float]) -> list[float]:
+    """Numerically stable softmax; empty input stays empty."""
+    if not values:
+        return []
+    peak = max(values)
+    exps = [math.exp(value - peak) for value in values]
+    total = sum(exps)
+    return [value / total for value in exps]
+
+
+def _logit_scale(model: Any) -> float:
+    """CLIP temperature for exclusive-pool softmax; 100 matches the usual CLIP demo."""
+    scale = getattr(model, "logit_scale", None)
+    if scale is None:
+        return 100.0
+    value = scale.exp() if hasattr(scale, "exp") else scale
+    return float(value.item() if hasattr(value, "item") else value)
+
+
+def _with_rank_gaps(entries: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
+    """Sort by mapped cosine and set gap to the next label in this full list."""
+    ranked = sorted(entries, key=lambda entry: float(entry["score"]), reverse=True)
+    annotated: list[dict[str, float | str]] = []
+    for index, entry in enumerate(ranked):
+        item = dict(entry)
+        nxt = ranked[index + 1] if index + 1 < len(ranked) else None
+        item["gap"] = round(float(entry["score"]) - float(nxt["score"]), 6) if nxt is not None else 0.0
+        annotated.append(item)
+    return annotated
+
+
 @lru_cache(maxsize=1)
 def _load_clip_components() -> tuple[Any, Any]:
     """Load model + processor lazily for Lambda warm invocations."""
@@ -45,10 +91,6 @@ def _load_clip_components() -> tuple[Any, Any]:
     model = CLIPModel.from_pretrained(model_id, local_files_only=local_only)
     processor = CLIPProcessor.from_pretrained(model_id, local_files_only=local_only)
     return model, processor
-
-
-def _prompt_for_label(label: str) -> str:
-    return f"a garment with {label}"
 
 
 def _image_from_url(image_url: str, timeout_seconds: float) -> Image.Image:
@@ -93,12 +135,127 @@ def _load_images(
     return images, errors
 
 
+def _entries_for_items(
+    items: list[ScoreItem],
+    raw_cosines: list[float],
+    *,
+    exclusive: bool,
+    model: Any,
+) -> list[dict[str, float | str]]:
+    probabilities = _softmax([cosine * _logit_scale(model) for cosine in raw_cosines]) if exclusive else None
+    entries: list[dict[str, float | str]] = []
+    for index, item in enumerate(items):
+        entry: dict[str, float | str] = {
+            "value": item.value,
+            "score": round(_normalise_to_unit_interval(raw_cosines[index]), 6),
+        }
+        if probabilities is not None:
+            entry["p"] = round(probabilities[index], 6)
+        if item.kind is not None:
+            entry["kind"] = item.kind
+        if item.article is not None:
+            entry["article"] = item.article
+        entries.append(entry)
+    return entries
+
+
+def _score_items(
+    model: Any,
+    processor: Any,
+    image: Image.Image,
+    items: list[ScoreItem],
+    *,
+    exclusive: bool = False,
+) -> list[dict[str, float | str]]:
+    if not items:
+        return []
+    batch = processor(
+        text=[item.caption for item in items],
+        images=image,
+        return_tensors="pt",
+        padding=True,
+    )
+    output = model(**batch)
+    image_embedding = output.image_embeds[0]
+    text_embeddings = output.text_embeds
+    image_embedding = image_embedding / image_embedding.norm()
+    text_embeddings = text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
+    raw_cosines = [float(score) for score in text_embeddings @ image_embedding]
+    return _entries_for_items(items, raw_cosines, exclusive=exclusive, model=model)
+
+
+def _generic_items(labels: list[str]) -> list[ScoreItem]:
+    """Pre-taxonomy caption used as the eval baseline: ``a garment with {label}``."""
+    items: list[ScoreItem] = []
+    for label in labels:
+        key = " ".join(label.replace("_", " ").split()).casefold()
+        items.append(ScoreItem(label, f"a garment with {key}"))
+    return items
+
+
+def _items_for_pool(slug: str, labels: list[str], caption_style: str) -> list[ScoreItem]:
+    if caption_style == "generic":
+        canonical = resolve_taxonomy(slug)
+        if canonical == "colour" and not labels:
+            labels = list(MODEL_COLOURS)
+        elif canonical == "product-type" and not labels:
+            labels = list(MODEL_GARMENT_TYPES)
+        elif canonical in STYLE_POOLS and not labels:
+            labels = [value for value, _caption in STYLE_POOLS[canonical]]
+        elif canonical == "subjects":
+            return _generic_items(list(GRAPHIC_MOTIFS))
+        return _generic_items(labels)
+    return prompts_for_pool(slug, labels)
+
+
+def _score_colour_opinion(
+    model: Any,
+    processor: Any,
+    image: Image.Image,
+    extra_labels: list[str],
+    *,
+    caption_style: str = "taxonomy",
+) -> list[dict[str, float | str]]:
+    """Probe FashionCLIP's colour space, then score mixes and featured combinations."""
+    items = _items_for_pool("colour", extra_labels, caption_style)
+    first_pass = _score_items(model, processor, image, items)
+    if caption_style == "generic":
+        return _with_rank_gaps(first_pass)
+    featured = featured_solid_colours(first_pass)
+    combined = first_pass + _score_items(model, processor, image, colour_combination_items(featured))
+    return _with_rank_gaps(combined)
+
+
+def _rank_pool(
+    model: Any,
+    processor: Any,
+    image: Image.Image,
+    slug: str,
+    labels: list[str],
+    top_k: int,
+    caption_style: str,
+) -> list[dict[str, float | str]] | None:
+    if resolve_taxonomy(slug) == "colour":
+        return _score_colour_opinion(model, processor, image, labels, caption_style=caption_style)
+    if not labels and not returns_full_pool(slug):
+        return None
+    ranked = _with_rank_gaps(
+        _score_items(
+            model,
+            processor,
+            image,
+            _items_for_pool(slug, labels, caption_style),
+            exclusive=pool_is_exclusive(slug),
+        )
+    )
+    return ranked if returns_full_pool(slug) else ranked[:top_k]
+
+
 @lru_cache(maxsize=64)
-def _text_embeddings_for_pool(slug: str, labels: tuple[str, ...]) -> Any:
-    """Cache normalized text embeddings for repeated label pools in warm Lambdas."""
+def _text_embeddings_for_captions(captions: tuple[str, ...]) -> Any:
+    """Cache normalized text embeddings for repeated caption tuples in warm Lambdas."""
     model, processor = _load_clip_components()
-    prompts = [_prompt_for_label(label) for label in labels]
-    text_inputs = processor(text=prompts, return_tensors="pt", padding=True)
+    text_inputs = processor(text=list(captions), return_tensors="pt", padding=True)
     with torch.inference_mode():
         text_embeddings = model.get_text_features(**text_inputs)
     return text_embeddings / text_embeddings.norm(dim=-1, keepdim=True)
@@ -108,6 +265,7 @@ def _score_loaded_images(
     images: dict[int, Image.Image],
     pools: dict[str, list[str]],
     top_k: int,
+    caption_style: str,
 ) -> dict[int, dict[str, list[dict[str, float | str]]]]:
     """Score already-fetched images in one Torch batch, reusing text embeddings per pool."""
     model, processor = _load_clip_components()
@@ -119,23 +277,35 @@ def _score_loaded_images(
 
     scores_by_index: dict[int, dict[str, list[dict[str, float | str]]]] = {index: {} for index in ordered_indices}
     for slug, labels in pools.items():
-        if not labels:
+        if resolve_taxonomy(slug) == "colour":
+            for image_index in ordered_indices:
+                scores_by_index[image_index][slug] = _score_colour_opinion(
+                    model,
+                    processor,
+                    images[image_index],
+                    labels,
+                    caption_style=caption_style,
+                )
             continue
-        text_embeddings = _text_embeddings_for_pool(slug, tuple(labels))
+        if not labels and not returns_full_pool(slug):
+            continue
+        items = _items_for_pool(slug, labels, caption_style)
+        if not items:
+            continue
+        text_embeddings = _text_embeddings_for_captions(tuple(item.caption for item in items))
         cosine_scores = image_embeddings @ text_embeddings.T
+        exclusive = pool_is_exclusive(slug)
+        keep_all = returns_full_pool(slug)
         for row_index, image_index in enumerate(ordered_indices):
-            ranked = sorted(
-                (
-                    {
-                        "value": label,
-                        "score": round(_normalise_to_unit_interval(float(score)), 6),
-                    }
-                    for label, score in zip(labels, cosine_scores[row_index], strict=True)
-                ),
-                key=lambda entry: float(entry["score"]),
-                reverse=True,
+            ranked = _with_rank_gaps(
+                _entries_for_items(
+                    items,
+                    [float(score) for score in cosine_scores[row_index]],
+                    exclusive=exclusive,
+                    model=model,
+                )
             )
-            scores_by_index[image_index][slug] = ranked[:top_k]
+            scores_by_index[image_index][slug] = ranked if keep_all else ranked[:top_k]
     return scores_by_index
 
 
@@ -145,14 +315,17 @@ def score_pools_for_images(
     pools: dict[str, list[str]],
     top_k: int,
     timeout_seconds: float = 20.0,
+    caption_style: str = "taxonomy",
 ) -> tuple[dict[int, dict[str, list[dict[str, float | str]]]], dict[int, ImageUnavailableError]]:
     """Return batched scores and per-image fetch errors."""
+    if caption_style not in {"taxonomy", "generic"}:
+        raise ValueError(f"unsupported caption_style: {caption_style}")
     if not image_urls or not pools:
         return {}, {}
     images, errors = _load_images(image_urls, timeout_seconds)
     if not images:
         return {}, errors
-    return _score_loaded_images(images, pools, top_k), errors
+    return _score_loaded_images(images, pools, top_k, caption_style), errors
 
 
 def score_pools_for_image(
@@ -161,14 +334,26 @@ def score_pools_for_image(
     pools: dict[str, list[str]],
     top_k: int,
     timeout_seconds: float = 20.0,
-) -> dict[str, list[dict[str, float | str]]]:
-    """Return top-k ranked labels per pool for one image URL."""
-    scores_by_index, errors = score_pools_for_images(
-        image_urls=[image_url],
-        pools=pools,
-        top_k=top_k,
-        timeout_seconds=timeout_seconds,
-    )
-    if 0 in errors:
-        raise errors[0]
-    return scores_by_index.get(0, {})
+    caption_style: str = "taxonomy",
+) -> dict[str, object]:
+    """Score only the pools present in the request.
+
+    Print pools honour ``top_k``. ``colour``, ``subjects``, and ``product-type``
+    use service-owned vocabularies (empty ``[]`` is enough); ``top_k`` is ignored
+    for those. ``caption_style="generic"`` is the eval baseline (one shared
+    ``a garment with {label}`` caption). Exclusive pools attach softmax ``p``;
+    every ranked list attaches ``gap`` against the full pool, before ``top_k``.
+    """
+    if caption_style not in {"taxonomy", "generic"}:
+        raise ValueError(f"unsupported caption_style: {caption_style}")
+
+    image = _image_from_url(image_url, timeout_seconds)
+    model, processor = _load_clip_components()
+
+    scored_pools: dict[str, list[dict[str, float | str]]] = {}
+    for slug, labels in pools.items():
+        ranked = _rank_pool(model, processor, image, slug, labels, top_k, caption_style)
+        if ranked is not None:
+            scored_pools[slug] = ranked
+
+    return {"scores": scored_pools}
